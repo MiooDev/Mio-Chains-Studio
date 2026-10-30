@@ -1,0 +1,18 @@
+schema_version = "1.0.0"
+
+id = "mio_chain_studio"
+version = "0.1.0"
+name = "Mio Chain Studio"
+tagline = "Pendentifs texte et chaines FiveM, prepares avec Sollumz"
+maintainer = "MiooDev"
+type = "add-on"
+
+tags = ["Import-Export", "Modeling"]
+
+# Testé uniquement avec Blender 5.2.3 et Sollumz 2.9.0.
+blender_version_min = "5.2.0"
+
+license = ["SPDX:GPL-3.0-or-later"]
+
+[permissions]
+files = "Importer chaines et display, ecrire atlas, rendus et exports"
