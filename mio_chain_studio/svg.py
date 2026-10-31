@@ -145,14 +145,25 @@ def detect_layers(context, proj, srcs):
 # ---------------------------------------------------------------------------
 
 def solidify(mesh, d, back, t):
-    """Aplatit le maillage au niveau `back` le long de `d`, puis l'épaissit de `t` (solide fermé)."""
+    """Aplatit le maillage au niveau `back` le long de `d`, puis l'épaissit de `t` en solide fermé.
+
+    L'orientation est fixée par construction (dos vers −d, avant vers +d, côtés vers l'extérieur), sans
+    recalcul automatique : les faces dégénérées (points alignés du SVG) ne peuvent donc rien inverser.
+    Retourne le nombre de faces dégénérées (surface nulle) conservées.
+    """
     dv = Vector(d)
     bm = bmesh.new()
     bm.from_mesh(mesh)
     for v in bm.verts:
         v.co = v.co - dv * v.co.dot(dv) + dv * back
+    bm.normal_update()
     uv = bm.loops.layers.uv.active
     faces = list(bm.faces)
+    dots = {f: f.normal.dot(dv) for f in faces}
+    real = [x for x in dots.values() if abs(x) > 0.5]
+    majority = 1 if sum(1 for x in real if x > 0) >= len(real) / 2 else -1
+    sign = {f: (1 if x > 0.5 else -1 if x < -0.5 else majority) for f, x in dots.items()}
+    degenerate = sum(1 for x in dots.values() if abs(x) <= 0.5)
     boundary = [e for e in bm.edges if len(e.link_faces) == 1]
     top = {v: bm.verts.new(v.co + dv * t) for v in list(bm.verts) if v.link_faces}
     for f in faces:
@@ -161,16 +172,23 @@ def solidify(mesh, d, back, t):
         if uv is not None:
             for lo, ln in zip(f.loops, nf.loops):
                 ln[uv].uv = lo[uv].uv
+        if sign[f] < 0:
+            nf.normal_flip()                       # avant : vers +d
     for e in boundary:
         f = e.link_faces[0]
         loop = next(lp for lp in f.loops if lp.edge == e)
         a, b = loop.vert, loop.link_loop_next.vert
-        side = bm.faces.new((b, a, top[a], top[b]))
+        quad = (a, b, top[b], top[a]) if sign[f] > 0 else (b, a, top[a], top[b])
+        side = bm.faces.new(quad)                  # côté : vers l'extérieur du contour
         side.material_index = f.material_index
-    bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
+    for f in faces:
+        if sign[f] > 0:
+            f.normal_flip()                        # dos : vers −d
+    bm.normal_update()
     bm.to_mesh(mesh)
     bm.free()
     mesh.update()
+    return degenerate
 
 
 def strip_black(mesh, threshold):
@@ -203,20 +221,54 @@ def strip_black(mesh, threshold):
     return removed
 
 
-def _area_facing(mesh, d, sign):
-    dv = np.array(d)
-    total, count = 0.0, 0
-    for p in mesh.polygons:
-        if float(np.dot(np.array(p.normal), dv)) * sign > 0.999:
-            total += p.area
-            count += 1
-    return total, count
+def plane_faces(mesh, matrix, d):
+    """Mesures par plan : (h min, h max, faces de dos, surface de dos, faces d'avant, faces mal orientées)."""
+    n_loops, n_polys = len(mesh.loops), len(mesh.polygons)
+    co = np.empty(len(mesh.vertices) * 3, dtype=np.float64)
+    mesh.vertices.foreach_get("co", co)
+    m = np.array(matrix)
+    dv = np.array(d, dtype=np.float64)
+    h = (co.reshape(-1, 3) @ m[:3, :3].T + m[:3, 3]) @ dv
+    hmin, hmax = float(h.min()), float(h.max())
+    tol = 1e-7 + 1e-6 * abs(hmax - hmin)
+    lv = np.empty(n_loops, dtype=np.int64)
+    mesh.loops.foreach_get("vertex_index", lv)
+    starts = np.empty(n_polys, dtype=np.int64)
+    mesh.polygons.foreach_get("loop_start", starts)
+    order = np.argsort(starts)
+    lh = h[lv]
+    pmin = np.empty(n_polys)
+    pmax = np.empty(n_polys)
+    pmin[order] = np.minimum.reduceat(lh, starts[order])
+    pmax[order] = np.maximum.reduceat(lh, starts[order])
+    on_back = pmax <= hmin + tol
+    on_front = pmin >= hmax - tol
+    area = np.empty(n_polys)
+    mesh.polygons.foreach_get("area", area)
+    normals = np.empty(n_polys * 3)
+    mesh.polygons.foreach_get("normal", normals)
+    nd = normals.reshape(-1, 3) @ np.array(matrix)[:3, :3].T @ dv
+    real = area > 1e-14
+    wrong = int(((on_back & real) & (nd > -0.5)).sum() + ((on_front & real) & (nd < 0.5)).sum())
+    return hmin, hmax, int(on_back.sum()), float(area[on_back].sum()), int(on_front.sum()), wrong
+
+
+def _existing_sources(proj):
+    out = []
+    for obj in results(proj):
+        src = bpy.data.objects.get(obj.get(KEY_SRC, ""))
+        if src is not None and src.type == "CURVE" and src not in out:
+            out.append(src)
+    return out
 
 
 def prepare(context, proj):
-    srcs, skipped = sources_from_selection(context, proj)
-    if not srcs:
+    """Tout ou rien : les nouveaux maillages ne remplacent les anciens qu'après vérification complète."""
+    selected, skipped = sources_from_selection(context, proj)
+    if not selected:
         raise McsError("Sélectionnez les courbes SVG (ou leurs maillages préparés).")
+    # Les autres courbes déjà préparées sont reconstruites avec la sélection : l'empilement reste cohérent.
+    srcs = selected + [s for s in _existing_sources(proj) if s not in selected]
     missing = [s.name for s in srcs if s.mio_svg_layer not in (1, 2, 3)]
     if missing:
         raise McsError("Couche non affectée pour : " + ", ".join(missing[:8]) +
@@ -243,50 +295,72 @@ def prepare(context, proj):
         cursor += thickness(proj, layer) + proj.layer_gap
 
     coll = project_collection(context, proj, "MCS_Pendentif_SVG", "svg")
-    created, report = [], []
-    for src in srcs:
-        layer = src.mio_svg_layer
-        mesh = flats[src]
-        flat_area = sum(p.area for p in mesh.polygons)
-        flat_faces = len(mesh.polygons)
-        solidify(mesh, d, backs[layer], thickness(proj, layer))
-        removed = strip_black(mesh, proj.black_threshold)
-        mesh.name = f"{src.name}_maillage"
-        tag(mesh, proj, role="svg")
-        old = [o for o in bpy.data.objects if o.get(TAG_SVG_RESULT) and o.get(KEY_SRC) == src.name
-               and o.get("mcs_project") == proj.project_id]
-        obj = bpy.data.objects.new(f"{src.name}_maillage", mesh)
-        tag(obj, proj, role="svg", **{TAG_SVG_RESULT: 1, KEY_SRC: src.name, "mcs_svg_layer": layer,
-                                      "mcs_flat_area": flat_area, "mcs_flat_faces": flat_faces})
-        link_only_to(obj, coll)
-        for o in old:
-            _replace_part(proj, o, obj)
-            data = o.data
-            bpy.data.objects.remove(o, do_unlink=True)
+    built, report = [], []
+    try:
+        for src in srcs:
+            layer = src.mio_svg_layer
+            mesh = flats.pop(src)
+            flat_area = sum(p.area for p in mesh.polygons)
+            flat_faces = len(mesh.polygons)
+            degenerate = solidify(mesh, d, backs[layer], thickness(proj, layer))
+            removed = strip_black(mesh, proj.black_threshold)
+            tag(mesh, proj, role="svg")
+            obj = bpy.data.objects.new(f"{src.name}_maillage", mesh)
+            tag(obj, proj, role="svg", **{"mcs_svg_pending": 1, KEY_SRC: src.name, "mcs_svg_layer": layer,
+                                          "mcs_flat_area": flat_area, "mcs_flat_faces": flat_faces})
+            link_only_to(obj, coll)
+            built.append((src, obj))
+            if removed:
+                report.append(("INFO", f"{src.name} : matériau(x) noir(s) retiré(s) "
+                                       f"({', '.join(sorted(set(removed)))}), géométrie conservée.", ""))
+            if degenerate:
+                report.append(("INFO", f"{src.name} : {degenerate} face(s) de surface nulle (points alignés du SVG) "
+                                       "conservée(s).", ""))
+        issues = verify(proj, [o for s, o in built])
+        errors = [m for sev, m, f in issues if sev == "ERROR"]
+        if errors:
+            raise McsError("Préparation non conforme, rien n'a été modifié : " + " ".join(errors))
+    except Exception:
+        for src, obj in built:
+            data = obj.data
+            bpy.data.objects.remove(obj, do_unlink=True)
             if data.users == 0:
                 bpy.data.meshes.remove(data)
+        for m in flats.values():
+            bpy.data.meshes.remove(m)
+        raise
+
+    # Réussite : remplacement des anciens maillages, puis sources masquées.
+    for src, obj in built:
+        for old in [o for o in results(proj) if o.get(KEY_SRC) == src.name]:
+            _replace_part(proj, old, obj)
+            data = old.data
+            bpy.data.objects.remove(old, do_unlink=True)
+            if data.users == 0:
+                bpy.data.meshes.remove(data)
+        del obj["mcs_svg_pending"]
+        obj[TAG_SVG_RESULT] = 1
+        obj.name = f"{src.name}_maillage"
+        obj.data.name = obj.name
         if not any(p.obj == obj for p in proj.parts):
             part = proj.parts.add()
             part.obj, part.role = obj, "PENDANT"
         tag(src, proj, role="svg_source", generated=False, **{TAG_SVG_SOURCE: 1})
         src.hide_set(True)
         src.hide_render = True
-        created.append(obj)
-        if removed:
-            report.append(("INFO", f"{obj.name} : matériau(x) noir(s) retiré(s) ({', '.join(sorted(set(removed)))}), "
-                                   "géométrie conservée.", ""))
-    for p in [p for p in proj.parts if p.obj is None]:
-        proj.parts.remove(list(proj.parts).index(p))
-    issues = verify(proj, created, backs) + report
-    errors = [m for s, m, f in issues if s == "ERROR"]
-    proj.svg_report = json.dumps(issues)
-    proj.svg_signature = "" if errors else signature(proj)
-    if errors:
-        raise McsError("Préparation non conforme : " + " ".join(errors))
+    for i in reversed(range(len(proj.parts))):
+        if proj.parts[i].obj is None:
+            proj.parts.remove(i)
+    issues = issues + report
+    others = len(srcs) - len(selected)
+    if others:
+        issues.append(("INFO", f"{others} autre(s) courbe(s) déjà préparée(s) reconstruite(s) pour garder "
+                               "l'empilement cohérent.", ""))
     if skipped:
         issues.append(("WARNING", "Ignorés (ni courbe ni maillage SVG préparé) : " + ", ".join(skipped[:6]), ""))
-        proj.svg_report = json.dumps(issues)
-    return created, issues
+    proj.svg_report = json.dumps(issues)
+    proj.svg_signature = signature(proj)
+    return [o for s, o in built], issues
 
 
 def _replace_part(proj, old, new):
@@ -300,31 +374,30 @@ def results(proj):
     return [o for o in bpy.data.objects if pid and o.get("mcs_project") == pid and o.get(TAG_SVG_RESULT)]
 
 
-def verify(proj, objs=None, backs=None):
-    """Mesures réelles : épaisseur, contact entre couches, surface conservée, matériaux noirs absents."""
+def verify(proj, objs=None):
+    """Mesures réelles : épaisseur, faces de dos et d'avant, surface, orientation, contact, matériaux noirs."""
     objs = objs if objs is not None else results(proj)
     d = axis_vector(proj)
-    dv = np.array(d)
     issues, extent = [], {}
     for obj in objs:
-        me = obj.data
-        co = np.empty(len(me.vertices) * 3, dtype=np.float64)
-        me.vertices.foreach_get("co", co)
-        h = co.reshape(-1, 3) @ np.array(obj.matrix_world)[:3, :3].T @ dv + float(np.array(obj.matrix_world)[:3, 3] @ dv)
         layer = obj.get("mcs_svg_layer", 0)
         t = thickness(proj, layer)
-        measured = float(h.max() - h.min())
-        tol = 1e-6 + 1e-5 * t
-        if abs(measured - t) > tol:
-            issues.append(("ERROR", f"{obj.name} : épaisseur mesurée {measured:.5f} m au lieu de {t:.5f} m.", ""))
-        lo, hi = extent.get(layer, (np.inf, -np.inf))
-        extent[layer] = (min(lo, float(h.min())), max(hi, float(h.max())))
-        area, faces = _area_facing(me, d, -1)
-        if abs(area - obj.get("mcs_flat_area", area)) > 1e-9 + 1e-5 * area or faces != obj.get("mcs_flat_faces", faces):
-            issues.append(("ERROR", f"{obj.name} : surface du dessin modifiée ({faces} faces de dos, "
-                                    f"{obj.get('mcs_flat_faces')} attendues).", ""))
-        if any(m is not None and is_black(m, proj.black_threshold) for m in me.materials):
+        hmin, hmax, n_back, back_area, n_front, wrong = plane_faces(obj.data, obj.matrix_world, d)
+        if abs((hmax - hmin) - t) > 1e-6 + 1e-5 * t:
+            issues.append(("ERROR", f"{obj.name} : épaisseur mesurée {hmax - hmin:.5f} m au lieu de {t:.5f} m.", ""))
+        expected_faces = obj.get("mcs_flat_faces", n_back)
+        expected_area = obj.get("mcs_flat_area", back_area)
+        if n_back != expected_faces or n_front != expected_faces:
+            issues.append(("ERROR", f"{obj.name} : {n_back} faces de dos et {n_front} faces d'avant pour "
+                                    f"{expected_faces} faces du dessin.", ""))
+        if abs(back_area - expected_area) > 1e-10 + 1e-5 * expected_area:
+            issues.append(("ERROR", f"{obj.name} : surface du dessin {back_area:.6f} m² au lieu de {expected_area:.6f} m².", ""))
+        if wrong:
+            issues.append(("ERROR", f"{obj.name} : {wrong} face(s) de dos ou d'avant mal orientée(s).", ""))
+        if any(m is not None and is_black(m, proj.black_threshold) for m in obj.data.materials):
             issues.append(("ERROR", f"{obj.name} : un matériau noir est encore présent.", ""))
+        lo, hi = extent.get(layer, (np.inf, -np.inf))
+        extent[layer] = (min(lo, hmin), max(hi, hmax))
     layers = sorted(extent)
     for a, b in zip(layers, layers[1:]):
         gap = extent[b][0] - extent[a][1]

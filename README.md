@@ -6,12 +6,12 @@ Addon Blender pour préparer **vos propres pendentifs et chaînes FiveM** avec *
 |---|---|
 | Blender | **5.2** (vérifié avec 5.2.3 LTS) |
 | Sollumz | **2.9.0** (dernière version publiée, vérifiée) avec sa dépendance `szio` |
-| Addon | 0.2.0 |
+| Addon | 0.2.1 |
 
 ## Installation
 
 1. Installez et activez **Sollumz 2.9.0** et ses dépendances (préférences de Sollumz → *Install dependencies*).
-2. Blender → **Édition → Préférences → Extensions** → menu **⌄** → **Installer depuis le disque…** → `dist/mio_chain_studio-0.2.0.zip`.
+2. Blender → **Édition → Préférences → Extensions** → menu **⌄** → **Installer depuis le disque…** → `dist/mio_chain_studio-0.2.1.zip`.
 3. Extrayez **Teef.zip** en conservant son arborescence :
    ```
    Teef/
@@ -37,9 +37,11 @@ Chaque section affiche un statut **À faire / À vérifier / Terminé**, recalcu
    - retire les matériaux noirs et leurs affectations, en gardant toute la géométrie (même les formes noires) et les autres matériaux ;
    - convertit les courbes en maillages et donne leur épaisseur aux couches : 0,05 m, 0,025 m et 0,015 m par défaut, modifiables ;
    - empile les couches le long de **+Z** (direction réglable), dos de la couche 2 contre l'avant de la couche 1, sans espace par défaut ;
-   - mesure les épaisseurs réelles et le contact entre couches.
+   - mesure les épaisseurs réelles et le contact entre couches, puis contrôle les faces de dos et d'avant sur leur plan, la surface du dessin et l'orientation des faces.
 
-Les courbes d'origine sont conservées, masquées, comme source. Un nouveau clic repart d'elles : ni épaisseur cumulée, ni doublon.
+Les faces de surface nulle, que Blender crée quand plusieurs points d'un tracé sont alignés, sont conservées et signalées. La préparation est « tout ou rien » : si une vérification échoue, rien n'est modifié.
+
+Les courbes d'origine sont conservées, masquées, comme source. Un nouveau clic repart d'elles, ainsi que des autres courbes déjà préparées du projet pour garder un empilement cohérent : ni épaisseur cumulée, ni doublon.
 
 ### 2 — Chaîne et composants
 - Choisissez un **.obj**, réglez l'échelle et les axes, puis **Importer ma chaîne**. Matériaux et UV importés sont conservés.

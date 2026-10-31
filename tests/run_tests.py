@@ -126,6 +126,12 @@ def draw_all_panels():
 # Données synthétiques
 # ---------------------------------------------------------------------------
 
+SVG_COMPLEXE = """<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120" viewBox="0 0 200 120">
+  <path id="cadre" fill="#c0c0c0" d="M0 0 L20 0 L40 0 L60 0 L80 0 L100 0 L100 20 L100 40 L100 60 L80 60 L60 60 L40 60 L20 60 L0 60 L0 40 L0 20 Z M10 10 L30 10 L50 10 L50 30 L50 50 L30 50 L10 50 L10 30 Z"/>
+  <path id="goutte" fill="#ffd700" d="M120 10 C150 0 180 20 170 50 C160 80 130 90 120 60 L120 40 L120 20 Z M135 30 C145 25 155 35 150 45 C145 55 135 50 135 40 Z"/>
+  <path id="lettre_e" fill="#000000" d="M10 70 L60 70 L60 80 L20 80 L20 90 L50 90 L50 100 L20 100 L20 110 L60 110 L60 118 L10 118 Z"/>
+</svg>"""
+
 SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="100" height="60" viewBox="0 0 100 60">
   <rect id="fond" x="0" y="0" width="100" height="60" fill="#c0c0c0"/>
   <path id="lettre" d="M10 10 H40 V50 H10 Z M20 20 V40 H30 V20 Z" fill="#000000"/>
@@ -301,6 +307,58 @@ def main():
     select_only(*curves)
     run("svg_prepare")
     check("Pendentif désigné automatiquement", sum(1 for x in p.parts if x.role == "PENDANT") == 4)
+
+    # SVG réaliste : points alignés (faces de surface nulle), trous, courbes de Bézier.
+    cpath = os.path.join(WORK, "complexe.svg")
+    open(cpath, "w").write(SVG_COMPLEXE)
+    before = set(bpy.data.objects)
+    bpy.ops.import_curve.svg(filepath=cpath)
+    cx = {o.name: o for o in bpy.data.objects if o not in before}
+    for name, layer in (("cadre", 1), ("goutte", 2), ("lettre_e", 3)):
+        cx[name].mio_svg_layer = layer
+    select_only(*cx.values())
+    check("SVG réaliste (points alignés, trous) préparé", run("svg_prepare") == {"FINISHED"}, p.svg_report[-300:])
+    check("Faces de surface nulle signalées et conservées", "surface nulle" in p.svg_report)
+    ok_vol = True
+    for obj in [o for o in svg.results(p) if o["mcs_svg_src"] in cx]:
+        hmin, hmax, n_back, back_area, n_front, wrong = svg.plane_faces(obj.data, obj.matrix_world, (0, 0, 1))
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        vol = bm.calc_volume(signed=True)
+        closed = all(e.is_manifold for e in bm.edges)
+        bm.free()
+        ok_vol &= (wrong == 0 and closed and n_back == n_front == obj["mcs_flat_faces"]
+                   and abs(vol - back_area * (hmax - hmin)) < 1e-9 + 1e-4 * abs(vol))
+    check("Solides fermés, bien orientés, volume = surface × épaisseur", ok_vol)
+    sigs = {o.name: (len(o.data.vertices), heights_along(o)) for o in svg.results(p)}
+    cx["goutte"].hide_set(False)
+    cx["goutte"].rotation_euler.x = 0.5
+    bpy.context.view_layer.update()
+    select_only(cx["goutte"])
+    check("Courbe non plane : préparation refusée", run("svg_prepare") != {"FINISHED"})
+    check("Échec : rien n'a été modifié", {o.name: (len(o.data.vertices), heights_along(o)) for o in svg.results(p)} == sigs
+          and not any(o.get("mcs_svg_pending") for o in bpy.data.objects))
+    cx["goutte"].rotation_euler.x = 0.0
+    bpy.context.view_layer.update()
+    real_verify = svg.verify
+    svg.verify = lambda proj, objs=None: [("ERROR", "échec simulé après construction", "")]
+    n_obj, n_mesh = len(bpy.data.objects), len(bpy.data.meshes)
+    select_only(*[o for o in svg.results(p) if o["mcs_svg_src"] in cx])
+    try:
+        res = run("svg_prepare")
+    finally:
+        svg.verify = real_verify
+    check("Échec après construction : nouveaux maillages retirés, anciens gardés", res != {"FINISHED"}
+          and len(bpy.data.objects) == n_obj and len(bpy.data.meshes) == n_mesh
+          and {o.name: (len(o.data.vertices), heights_along(o)) for o in svg.results(p)} == sigs)
+    for obj in [o for o in svg.results(p) if o["mcs_svg_src"] in cx]:
+        for i in reversed(range(len(p.parts))):
+            if p.parts[i].obj == obj:
+                p.parts.remove(i)
+        bpy.data.objects.remove(obj)
+    for c in cx.values():
+        bpy.data.objects.remove(c)
+    check("Retour aux 4 maillages du premier SVG", len(svg.results(p)) == 4)
 
     # 2. Chaîne -----------------------------------------------------------------------
     print("\n[2] Chaîne")

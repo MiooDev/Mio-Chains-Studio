@@ -1,4 +1,4 @@
-# Vérifications, limites connues et tests restants (version 0.2.0)
+# Vérifications, limites connues et tests restants (version 0.2.1)
 
 ## Environnement des tests réellement exécutés
 
@@ -9,12 +9,14 @@
 - **Copie testée** : l'addon **installé depuis le ZIP** (`extensions.package_install_files`).
 - **Script** : `tests/run_tests.py`.
 
-**Résultat : 132/132 vérifications réussies.**
+**Résultat : 139/139 vérifications réussies.**
 
 | Point demandé | Vérification exécutée |
 |---|---|
 | Formes SVG conservées après retrait des noirs | Faces de dos et trou de la lettre noire conservés ; forme entièrement noire gardée sans matériau ; matériaux non noirs identiques ; dessin XY inchangé |
 | Épaisseurs réelles et contact | Mesuré : 0,05 / 0,025 / 0,015 m ; dos de la couche 2 = avant de la couche 1 ; idem pour la couche 3 ; direction −Z |
+| SVG réaliste (corrigé en 0.2.1) | Tracés avec points alignés (faces de surface nulle), trous et courbes de Bézier : solides fermés et bien orientés, volume = surface × épaisseur, faces nulles signalées |
+| Préparation « tout ou rien » | Courbe non plane : refus avant toute création ; échec simulé après construction : nouveaux maillages retirés, anciens gardés, sources non masquées |
 | Pas d'accumulation | Deux clics de plus : épaisseurs identiques, 4 maillages ; une épaisseur modifiée recalcule l'empilement |
 | Ordre des couches | Même hauteur : rien n'est deviné et la préparation est refusée ; hauteurs distinctes : ordre détecté |
 | Chaîne OBJ | Matériau et UV conservés ; ré-import sans doublon ; chaîne gardée si le fichier est absent ou sans maillage ; chaîne de la scène ajoutée et retirée sans suppression |
@@ -52,5 +54,7 @@
 - **LOD Medium et Low** : aucune simplification automatique. Le mode « copie » recopie le High tel quel (non optimisé).
 - **Seconde map UV de `ped_emissive.sps`** : `UVMap 1` est créée par Sollumz avec ses valeurs par défaut ; son rôle exact dans le shader n'est pas documenté ici.
 - **SVG** : chaque courbe doit être plane, perpendiculaire à la direction d'empilement, et remplie (*Fill Mode*). Les maillages produits gardent leurs coordonnées monde (origine à l'origine du monde).
+- **Tracés SVG qui se chevauchent ou se croisent** : le remplissage de Blender y est déjà ambigu. L'addon l'épaissit fidèlement, mais le solide obtenu se recoupe lui-même. Préférez des tracés simples, unis à l'avance dans votre logiciel de dessin.
+- **Reconstruction groupée** : préparer une sélection reconstruit aussi les autres courbes déjà préparées du projet, pour garder l'empilement cohérent. Préparez un pendentif à la fois.
 - **Noms en double** : Blender ajoute `.001` quand un nom est déjà pris (par exemple drawable et fichier nommés pareil). Sollumz retire ce suffixe à l'export ; le panneau affiche le nom réellement exporté.
 - **Fichiers de stream FiveM** (manifest, métadonnées de vêtements) : hors du périmètre de l'addon.
