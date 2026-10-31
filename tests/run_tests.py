@@ -407,6 +407,7 @@ def main():
     shared_before = fnode.image.colorspace_settings.name
     fond_mesh = [o for o in svg.results(p) if o["mcs_svg_src"] == fond.name][0]
     n_sel = edit_select_faces(fond_mesh, lambda f: f.normal.z > 0.9)
+    check("Taille du cube par défaut : 0,2", abs(p.cube_size - 0.2) < 1e-7, p.cube_size)
     p.mat_kind, p.mat_mode, p.diffuse_path = "PED", "CUSTOM", diff
     me = fond_mesh.data
     bpy.ops.object.mode_set(mode="OBJECT")

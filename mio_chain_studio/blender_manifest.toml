@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "mio_chain_studio"
-version = "0.2.2"
+version = "0.2.3"
 name = "Mio Chain Studio"
 tagline = "Preparer ses pendentifs et chaines FiveM avec Sollumz"
 maintainer = "MiooDev"

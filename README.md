@@ -6,12 +6,12 @@ Addon Blender pour préparer **vos propres pendentifs et chaînes FiveM** avec *
 |---|---|
 | Blender | **5.2** (vérifié avec 5.2.3 LTS) |
 | Sollumz | **2.9.0** (dernière version publiée, vérifiée) avec sa dépendance `szio` |
-| Addon | 0.2.2 |
+| Addon | 0.2.3 |
 
 ## Installation
 
 1. Installez et activez **Sollumz 2.9.0** et ses dépendances (préférences de Sollumz → *Install dependencies*).
-2. Blender → **Édition → Préférences → Extensions** → menu **⌄** → **Installer depuis le disque…** → `dist/mio_chain_studio-0.2.2.zip`.
+2. Blender → **Édition → Préférences → Extensions** → menu **⌄** → **Installer depuis le disque…** → `dist/mio_chain_studio-0.2.3.zip`.
 3. Extrayez **Teef.zip** en conservant son arborescence :
    ```
    Teef/
@@ -63,7 +63,7 @@ Les courbes d'origine sont conservées, masquées, comme source. Un nouveau clic
    - crée ou réutilise le matériau ;
    - l'assigne à ces faces uniquement ;
    - active **Embedded** pour Bump et Spec, et met Bump en **Non-Color** ;
-   - fait une **Cube Projection** sur ces faces seulement (réglages exposés).
+   - fait une **Cube Projection** sur ces faces seulement (taille du cube 0,2 par défaut, réglages exposés).
 
    Embedded de la Diffuse reste réglable. Une image partagée avec un autre matériau n'est pas modifiée : l'addon en charge une copie.
 

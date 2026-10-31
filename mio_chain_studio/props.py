@@ -123,7 +123,7 @@ class MCS_Project(bpy.types.PropertyGroup):
                               description="Vide = teef_spec_000.dds du dossier Teef")
     diffuse_embedded: BoolProperty(name="Diffuse intégrée (Embedded)", default=False,
                                    description="Intégrer la texture diffuse au YDD (DDS obligatoire)")
-    cube_size: FloatProperty(name="Taille du cube", default=1.0, min=0.0001, soft_max=10.0,
+    cube_size: FloatProperty(name="Taille du cube", default=0.2, min=0.0001, soft_max=10.0,
                              description="Taille du cube de projection (Cube Projection)")
     cube_correct_aspect: BoolProperty(name="Corriger l'aspect", default=True)
     cube_clip_to_bounds: BoolProperty(name="Limiter aux bords", default=False)
