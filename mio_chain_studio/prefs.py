@@ -1,4 +1,4 @@
-"""Préférences de l'addon : seuils, encodeurs DDS, repères de display enregistrés."""
+"""Préférences de l'addon : dossier Teef mémorisé, presets, seuils, repères de display."""
 
 import json
 import os
@@ -14,62 +14,51 @@ def addon_prefs(context=None):
 
 
 def default_presets_dir():
-    return bpy.utils.user_resource("CONFIG", path=os.path.join("mio_chain_studio", "prereglages"), create=True)
+    return bpy.utils.user_resource("CONFIG", path=os.path.join("mio_chain_studio", "presets"), create=True)
+
+
+def save_user_prefs():
+    """Enregistre les préférences si Blender ne le fait pas automatiquement."""
+    if not bpy.context.preferences.use_preferences_save:
+        try:
+            bpy.ops.wm.save_userpref()
+        except RuntimeError:
+            pass
 
 
 class MCS_Preferences(bpy.types.AddonPreferences):
     bl_idname = __package__
 
-    tri_warning: IntProperty(
-        name="Seuil d'avertissement triangles",
-        description="Seuil personnel : au-delà, un avertissement s'affiche. Ce n'est pas une limite officielle de FiveM",
-        default=15000, min=100,
-    )
-    texture_warning: IntProperty(
-        name="Seuil d'avertissement texture (px)",
-        description="Côté maximal d'une texture avant avertissement. Seuil personnel, pas une limite officielle",
-        default=2048, min=16,
-    )
-    texconv_path: StringProperty(
-        name="texconv (DirectXTex)",
-        description="Chemin de texconv.exe (outil Microsoft gratuit). Vide = recherche dans le PATH",
-        subtype="FILE_PATH",
-    )
-    magick_path: StringProperty(
-        name="ImageMagick",
-        description="Chemin de magick (ImageMagick). Vide = recherche dans le PATH",
-        subtype="FILE_PATH",
-    )
-    presets_dir: StringProperty(
-        name="Dossier des préréglages",
-        description="Dossier où sont enregistrés les préréglages de matériaux (JSON)",
+    teef_dir: StringProperty(
+        name="Dossier Teef",
+        description="Dossier « Teef » extrait de Teef.zip (mémorisé pour les projets suivants)",
         subtype="DIR_PATH",
     )
-    display_markers: StringProperty(
-        name="Repères de display enregistrés",
-        description="Données internes (JSON) : repère de placement par fichier display",
-        default="{}",
-        options={"HIDDEN"},
+    presets_dir: StringProperty(
+        name="Dossier des presets",
+        description="Dossier des presets de matériaux (JSON). Vide = dossier de configuration de Blender",
+        subtype="DIR_PATH",
     )
+    tri_warning: IntProperty(
+        name="Seuil d'avertissement triangles",
+        description="Seuil personnel ; ce n'est pas une limite officielle de FiveM",
+        default=15000, min=100,
+    )
+    display_markers: StringProperty(default="{}", options={"HIDDEN"})
 
     def draw(self, context):
-        layout = self.layout
-        col = layout.column()
-        col.label(text="Seuils d'avertissement (personnels, modifiables) :")
-        col.prop(self, "tri_warning")
-        col.prop(self, "texture_warning")
-        col.separator()
-        col.label(text="Encodeurs DDS (au moins un est nécessaire pour convertir l'atlas) :")
-        col.prop(self, "texconv_path")
-        col.prop(self, "magick_path")
-        col.separator()
+        col = self.layout.column()
+        col.prop(self, "teef_dir")
         col.prop(self, "presets_dir")
-        markers = self.markers()
-        col.label(text=f"Repères de display enregistrés : {len(markers)}")
-        for path in list(markers)[:8]:
-            col.label(text=path, icon="EMPTY_AXIS")
+        col.label(text=f"Presets enregistrés dans : {self.presets_folder()}")
+        col.prop(self, "tri_warning")
+        col.label(text=f"Repères de display enregistrés : {len(self.markers())}")
 
-    # Repères enregistrés -------------------------------------------------
+    def presets_folder(self):
+        path = bpy.path.abspath(self.presets_dir) if self.presets_dir else default_presets_dir()
+        os.makedirs(path, exist_ok=True)
+        return path
+
     def markers(self):
         try:
             data = json.loads(self.display_markers or "{}")
@@ -81,18 +70,3 @@ class MCS_Preferences(bpy.types.AddonPreferences):
         data = self.markers()
         data[key] = payload
         self.display_markers = json.dumps(data)
-
-    def presets_folder(self):
-        path = bpy.path.abspath(self.presets_dir) if self.presets_dir else default_presets_dir()
-        os.makedirs(path, exist_ok=True)
-        return path
-
-
-def save_user_prefs():
-    """Enregistre les préférences si l'enregistrement automatique est désactivé."""
-    prefs = bpy.context.preferences
-    if not prefs.use_preferences_save:
-        try:
-            bpy.ops.wm.save_userpref()
-        except RuntimeError:
-            pass

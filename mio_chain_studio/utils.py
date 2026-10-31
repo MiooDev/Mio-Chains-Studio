@@ -1,4 +1,4 @@
-"""Outils communs : étiquettes de projet, collections, suppression sûre, statistiques, signatures."""
+"""Outils communs : étiquettes de projet, suppression sûre, composants, signatures, affichage."""
 
 import hashlib
 import os
@@ -7,40 +7,29 @@ import uuid
 
 import bpy
 import numpy as np
-from mathutils import Matrix
 
-# Propriétés personnalisées posées sur les données générées par l'addon.
 TAG_PROJECT = "mcs_project"      # identifiant du projet propriétaire
-TAG_ROLE = "mcs_role"            # chaine / texte / plaque / beliere / pivot / racine / source_texte
-TAG_GENERATED = "mcs_generated"  # 1 = créé par l'addon (peut être remplacé ou supprimé par lui)
-TAG_EXPORT = "mcs_export"        # objet de la copie d'export
-TAG_PREVIEW = "mcs_preview"      # copie de présentation (scène d'aperçu)
-TAG_DISPLAY = "mcs_display"      # élément chargé depuis le .blend du display
-
-ROLES_PENDANT = ("texte", "plaque", "beliere")
-ROLES_ALL = ("chaine",) + ROLES_PENDANT
-ROLE_LABELS = {
-    "chaine": "Chaîne",
-    "texte": "Texte du pendentif",
-    "plaque": "Plaque",
-    "beliere": "Bélière",
-}
-ROLE_PROP = {
-    "chaine": "chain",
-    "texte": "pendant_text",
-    "plaque": "plate",
-    "beliere": "bail",
-}
+TAG_ROLE = "mcs_role"
+TAG_GENERATED = "mcs_generated"  # 1 = créé par l'addon : il peut le remplacer ou le supprimer
+TAG_SVG_SOURCE = "mcs_svg_source"
+TAG_SVG_RESULT = "mcs_svg_result"
+TAG_IMPORTED = "mcs_imported"
+TAG_REFERENCE = "mcs_reference"
+TAG_EXPORT = "mcs_export"
+TAG_FINAL = "mcs_final"
+TAG_PREVIEW = "mcs_preview"
+TAG_DISPLAY = "mcs_display"
 
 STATUS_TODO = "À faire"
 STATUS_CHECK = "À vérifier"
 STATUS_DONE = "Terminé"
 STATUS_ICONS = {STATUS_TODO: "RADIOBUT_OFF", STATUS_CHECK: "ERROR", STATUS_DONE: "CHECKMARK"}
 SEVERITY_ICONS = {"ERROR": "CANCEL", "WARNING": "ERROR", "INFO": "INFO"}
+ROLE_LABELS = {"CHAIN": "Chaîne", "PENDANT": "Pendentif"}
 
 
 class McsError(Exception):
-    """Erreur destinée à l'utilisateur (message déjà en français)."""
+    """Erreur destinée à l'utilisateur (message en français)."""
 
 
 # ---------------------------------------------------------------------------
@@ -48,7 +37,7 @@ class McsError(Exception):
 # ---------------------------------------------------------------------------
 
 def project_scene(context):
-    """Scène qui porte le projet (la scène d'aperçu renvoie vers sa scène source)."""
+    """Scène du projet (une scène d'aperçu renvoie vers sa scène source)."""
     scene = context.scene
     src = getattr(scene, "mio_chain_source", None)
     return src if src is not None else scene
@@ -74,62 +63,50 @@ def tag(id_block, proj, role=None, generated=True, **extra):
         id_block[key] = value
 
 
-def is_owned(id_block, proj, require_generated=True):
-    if id_block is None or not proj.project_id:
-        return False
-    if id_block.get(TAG_PROJECT) != proj.project_id:
-        return False
-    return bool(id_block.get(TAG_GENERATED)) if require_generated else True
+def owned(id_block, proj, marker=TAG_GENERATED):
+    return (id_block is not None and bool(proj.project_id) and id_block.get(TAG_PROJECT) == proj.project_id
+            and bool(id_block.get(marker)))
 
 
-def ensure_collection(name, parent, proj, role):
-    """Retourne la collection du projet ayant ce rôle, ou la crée sous `parent`."""
+def remove_owned_object(obj, proj, marker=TAG_GENERATED):
+    """Supprime un objet seulement s'il appartient au projet et porte `marker`. Retourne True si supprimé."""
+    if not owned(obj, proj, marker):
+        return False
+    data = obj.data
+    bpy.data.objects.remove(obj, do_unlink=True)
+    if isinstance(data, bpy.types.Mesh) and data.users == 0 and data.get(TAG_PROJECT) == proj.project_id:
+        bpy.data.meshes.remove(data)
+    return True
+
+
+def project_collection(context, proj, name, role):
+    """Collection du projet (créée sous « Mio Chain Studio » dans la scène du projet si absente)."""
+    ensure_project_id(proj)
+    scene = project_scene(context)
+    root = None
     for coll in bpy.data.collections:
-        if is_owned(coll, proj) and coll.get(TAG_ROLE) == role:
-            if parent is not None and coll.name not in parent.children:
-                parent.children.link(coll)
+        if coll.get(TAG_PROJECT) == proj.project_id and coll.get(TAG_ROLE) == "racine":
+            root = coll
+    if root is None:
+        root = bpy.data.collections.new("Mio Chain Studio")
+        tag(root, proj, role="racine")
+    if root.name not in scene.collection.children:
+        scene.collection.children.link(root)
+    for coll in root.children:
+        if coll.get(TAG_PROJECT) == proj.project_id and coll.get(TAG_ROLE) == role:
             return coll
     coll = bpy.data.collections.new(name)
     tag(coll, proj, role=role)
-    if parent is not None:
-        parent.children.link(coll)
+    root.children.link(coll)
     return coll
 
 
 def link_only_to(obj, coll):
-    """Range un objet créé par l'addon dans une seule collection."""
     for c in list(obj.users_collection):
         if c != coll:
             c.objects.unlink(obj)
     if obj.name not in coll.objects:
         coll.objects.link(obj)
-
-
-def remove_generated_object(obj, proj, marker=TAG_GENERATED):
-    """Supprime un objet uniquement s'il a été créé par ce projet. Retourne True si supprimé."""
-    if obj is None or obj.get(TAG_PROJECT) != proj.project_id or not obj.get(marker):
-        return False
-    data = obj.data
-    bpy.data.objects.remove(obj, do_unlink=True)
-    if data is not None and data.users == 0 and data.get(TAG_PROJECT) == proj.project_id:
-        remove_id(data)
-    return True
-
-
-_ID_CONTAINERS = (
-    (bpy.types.Mesh, "meshes"),
-    (bpy.types.Curve, "curves"),
-    (bpy.types.Armature, "armatures"),
-    (bpy.types.Material, "materials"),
-    (bpy.types.Image, "images"),
-)
-
-
-def remove_id(id_block):
-    for id_type, coll_name in _ID_CONTAINERS:
-        if isinstance(id_block, id_type):
-            getattr(bpy.data, coll_name).remove(id_block)
-            return
 
 
 def iter_tree(obj):
@@ -138,50 +115,35 @@ def iter_tree(obj):
         yield from iter_tree(child)
 
 
-def role_object(proj, role):
-    return getattr(proj, ROLE_PROP[role])
+# ---------------------------------------------------------------------------
+# Composants du bijou
+# ---------------------------------------------------------------------------
 
-
-def component_objects(proj, roles=ROLES_ALL):
-    """Objets maillage des composants, la chaîne pouvant être un vide parent de plusieurs maillages."""
-    result = []
-    for role in roles:
-        obj = role_object(proj, role)
-        if obj is None:
+def part_meshes(proj, role=None):
+    """[(objet maillage, rôle)] des composants désignés ; un vide compte pour ses maillages enfants."""
+    out, seen = [], set()
+    for part in proj.parts:
+        obj = part.obj
+        if obj is None or (role and part.role != role):
             continue
-        if role == "chaine" and obj.type == "EMPTY":
-            result.extend((o, role) for o in iter_tree(obj) if o.type == "MESH")
-        elif obj.type == "MESH":
-            result.append((obj, role))
-    return result
+        for o in (iter_tree(obj) if obj.type == "EMPTY" else [obj]):
+            if o.type == "MESH" and o.name not in seen:
+                seen.add(o.name)
+                out.append((o, part.role))
+    return out
 
 
 # ---------------------------------------------------------------------------
-# Statistiques
+# Statistiques et signatures
 # ---------------------------------------------------------------------------
 
-def triangle_count_mesh(mesh):
+def triangle_count(mesh):
     n = len(mesh.polygons)
     if n == 0:
         return 0
     loops = np.empty(n, dtype=np.int32)
     mesh.polygons.foreach_get("loop_total", loops)
     return int((loops - 2).sum())
-
-
-def triangle_count(obj, depsgraph=None):
-    if obj is None or obj.type not in {"MESH", "FONT", "CURVE"}:
-        return 0
-    if depsgraph is not None:
-        obj_eval = obj.evaluated_get(depsgraph)
-        mesh = obj_eval.to_mesh()
-        try:
-            return triangle_count_mesh(mesh)
-        finally:
-            obj_eval.to_mesh_clear()
-    if obj.type == "MESH":
-        return triangle_count_mesh(obj.data)
-    return 0
 
 
 def mesh_checksum(mesh):
@@ -205,68 +167,53 @@ def hash_strings(parts):
     return h.hexdigest()[:16]
 
 
-def object_signature_parts(obj):
+def object_signature(obj):
     parts = [obj.name, obj.type, matrix_key(obj.matrix_world)]
     if obj.type == "MESH":
         me = obj.data
-        parts.append(mesh_checksum(me))
-        parts.append("|".join(g.name for g in obj.vertex_groups))
-        parts.append("|".join(m.name if m else "-" for m in me.materials))
-        parts.append("|".join(u.name for u in me.uv_layers))
-        parts.append("|".join(f"{c.name}:{c.domain}:{c.data_type}" for c in me.color_attributes))
-        parts.append("|".join(f"{m.type}:{m.name}:{getattr(m, 'object', None) and m.object.name}" for m in obj.modifiers))
+        parts += [mesh_checksum(me), "|".join(m.name if m else "-" for m in me.materials),
+                  "|".join(u.name for u in me.uv_layers),
+                  "|".join(f"{c.name}:{c.domain}:{c.data_type}" for c in me.color_attributes)]
+        mi = np.empty(len(me.polygons), dtype=np.int32)
+        me.polygons.foreach_get("material_index", mi)
+        parts.append(int(mi.sum()))
     return parts
 
 
-def material_signature_parts(mat):
-    parts = [mat.name, getattr(getattr(mat, "shader_properties", None), "filename", "")]
-    if mat.node_tree:
-        for n in mat.node_tree.nodes:
-            if n.bl_idname == "ShaderNodeTexImage":
-                parts.append(f"{n.name}={n.image.filepath if n.image else ''}")
-            elif n.bl_idname == "SOLLUMZ_NT_SHADER_Parameter":
-                parts.append(f"{n.name}=" + ",".join(f"{o.default_value:.4f}" for o in n.outputs))
-    return parts
-
-
-def sources_signature(proj):
+def parts_signature(proj):
     parts = []
-    for obj, role in component_objects(proj):
+    for obj, role in part_meshes(proj):
         parts.append(role)
-        parts.extend(object_signature_parts(obj))
-        for mat in obj.data.materials:
-            if mat:
-                parts.extend(material_signature_parts(mat))
-    arm = proj.ref_armature
-    parts.append(arm.name if arm else "-")
-    if arm is not None and arm.type == "ARMATURE":
-        parts.append(len(arm.data.bones))
-        parts.append(matrix_key(arm.matrix_world))
-    parts += [proj.ydd_name(), proj.drawable_name(), proj.texture_name(), proj.use_atlas,
-              proj.atlas_signature if proj.use_atlas else "", proj.use_vertex_colors,
-              tuple(proj.vcol0), tuple(proj.vcol1)]
+        parts.extend(object_signature(obj))
     return hash_strings(parts)
 
 
+def world_bounds(objs):
+    pts = []
+    for obj in objs:
+        if obj.type == "MESH" and len(obj.data.vertices):
+            n = len(obj.data.vertices)
+            co = np.empty(n * 3, dtype=np.float64)
+            obj.data.vertices.foreach_get("co", co)
+            co = co.reshape(-1, 3)
+            m = np.array(obj.matrix_world)
+            pts.append(co @ m[:3, :3].T + m[:3, 3])
+    if not pts:
+        return None
+    allp = np.vstack(pts)
+    return allp.min(axis=0), allp.max(axis=0)
+
+
 # ---------------------------------------------------------------------------
-# Chemins
+# Chemins et images
 # ---------------------------------------------------------------------------
 
 def abspath(path):
     return os.path.normpath(bpy.path.abspath(path)) if path else ""
 
 
-def project_dir_or_error(sub):
-    """Dossier `//sub` à côté du .blend ; exige un fichier enregistré."""
-    if not bpy.data.filepath:
-        raise McsError("Enregistrez d'abord le fichier .blend : les fichiers générés sont rangés à côté de lui.")
-    path = os.path.join(os.path.dirname(bpy.data.filepath), sub)
-    os.makedirs(path, exist_ok=True)
-    return path
-
-
-def is_power_of_two(n):
-    return n > 0 and (n & (n - 1)) == 0
+def same_path(a, b):
+    return bool(a) and bool(b) and os.path.normcase(abspath(a)) == os.path.normcase(abspath(b))
 
 
 # ---------------------------------------------------------------------------
@@ -274,18 +221,21 @@ def is_power_of_two(n):
 # ---------------------------------------------------------------------------
 
 def draw_wrapped(layout, context, text, icon="NONE"):
-    width = context.region.width if context.region else 300
+    width = context.region.width if getattr(context, "region", None) else 300
     chars = max(20, int(width / 6.5))
-    lines = textwrap.wrap(text, chars) or [""]
     col = layout.column(align=True)
     col.scale_y = 0.8
+    lines = [line for block in text.split("\n") for line in (textwrap.wrap(block, chars) or [""])]
     for i, line in enumerate(lines):
-        col.label(text=line, icon=icon if i == 0 else "BLANK1" if icon != "NONE" else "NONE")
+        if icon == "NONE":
+            col.label(text=line)
+        else:
+            col.label(text=line, icon=icon if i == 0 else "BLANK1")
     return col
 
 
-def draw_issues(layout, context, issues, limit=12):
-    """Affiche une liste de (sévérité, message, correction)."""
+def draw_issues(layout, context, issues, limit=10):
+    """Affiche [(sévérité, message, correction)]."""
     if not issues:
         return
     box = layout.box()
@@ -295,7 +245,3 @@ def draw_issues(layout, context, issues, limit=12):
             draw_wrapped(box, context, "→ " + fix)
     if len(issues) > limit:
         box.label(text=f"… et {len(issues) - limit} autre(s) point(s).")
-
-
-def identity():
-    return Matrix.Identity(4)

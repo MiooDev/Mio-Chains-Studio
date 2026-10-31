@@ -2,7 +2,7 @@
 
 Toutes les opérations GTA (matériaux, dictionnaires de textures, export) passent par
 les fonctions et opérateurs de la version de Sollumz réellement installée.
-Testé avec Sollumz 2.9.0 ; une autre version déclenche un avertissement.
+Vérifié avec Sollumz 2.9.0 (dernière version publiée) ; une autre version déclenche un avertissement.
 """
 
 import importlib
@@ -212,50 +212,62 @@ def color_attr_name(index):
 
 
 # ---------------------------------------------------------------------------
-# Hiérarchie Drawable
+# Hiérarchie Drawable et LOD
 # ---------------------------------------------------------------------------
 
-def set_model(obj):
+LOD_LEVELS = (("sollumz_high", "High"), ("sollumz_medium", "Medium"), ("sollumz_low", "Low"),
+              ("sollumz_verylow", "Very Low"))
+
+
+def lod_meshes(obj):
+    """{niveau: maillage} des LOD Sollumz de l'objet (None si vide ; vide si Sollumz est inactif)."""
+    lods = getattr(obj, "sz_lods", None)
+    if lods is None:
+        return {}
+    return {lvl: lods.get_lod(lvl).mesh for lvl, label in LOD_LEVELS}
+
+
+def set_lods(obj, meshes):
+    """Fixe les LOD : `meshes` = {niveau: maillage ou None}. Le niveau High est le maillage de l'objet."""
     obj.sollum_type = MODEL
-    obj.sz_lods.get_lod(LOD_HIGH).mesh = obj.data
-    obj.sz_lods.active_lod_level = LOD_HIGH
+    lods = obj.sz_lods
+    for lvl, label in LOD_LEVELS:
+        lods.get_lod(lvl).mesh = meshes.get(lvl)
+    lods.active_lod_level = LOD_HIGH
 
 
 # ---------------------------------------------------------------------------
-# Dictionnaires de textures (YTD)
+# Import (opérateur sollumz.import_assets de la version installée)
 # ---------------------------------------------------------------------------
 
-def find_txd(scene, name):
-    for txd in scene.sz_txds.texture_dictionaries:
-        if txd.name == name:
-            return txd
-    return None
+def import_ydd_with_external_skeleton(context, ydd_path, yft_path, collection):
+    """Importe un YDD avec un squelette YFT externe (mode « Saved » de Sollumz, chemin explicite).
 
-
-def ensure_txd(scene, name, images):
-    """Crée ou remplace le contenu du dictionnaire de textures Sollumz `name`."""
-    txd = find_txd(scene, name) or scene.sz_txds.new_texture_dictionary(name)
-    while len(txd.textures):
-        txd.textures.remove(len(txd.textures) - 1)
-    for img in images:
-        txd.new_texture(img)
-    return txd
-
-
-def select_txd(scene, name):
-    txds = scene.sz_txds.texture_dictionaries
-    for i, txd in enumerate(txds):
-        if txd.name == name:
-            txds.select(i)
-            return True
-    return False
+    Retourne la liste des nouveaux objets. Paramètres vérifiés dans Sollumz 2.9.0 :
+    use_custom_settings, dwd_import_external_skeleton="SAVED", dwd_import_external_skeleton_saved_path,
+    split_by_group, textures_mode.
+    """
+    before = set(bpy.data.objects)
+    directory = os.path.dirname(ydd_path) + os.sep
+    with context.temp_override(collection=collection):
+        result = bpy.ops.sollumz.import_assets(
+            directory=directory,
+            files=[{"name": os.path.basename(ydd_path)}],
+            use_custom_settings=True,
+            dwd_import_external_skeleton="SAVED",
+            dwd_import_external_skeleton_saved_path=yft_path,
+            split_by_group=False,
+            textures_mode="PACK",
+        )
+    new = [o for o in bpy.data.objects if o not in before]
+    return result, new
 
 
 # ---------------------------------------------------------------------------
 # Export
 # ---------------------------------------------------------------------------
 
-def export_assets(context, scene, root_obj, directory, formats, versions, export_ytd_name=None):
+def export_assets(context, scene, root_obj, directory, formats, versions):
     """Lance l'opérateur d'export de Sollumz sur `root_obj` uniquement, dans la scène du projet."""
     view_layer = context.view_layer if context.scene == scene else scene.view_layers[0]
     for obj in view_layer.objects:
@@ -277,13 +289,10 @@ def export_assets(context, scene, root_obj, directory, formats, versions, export
         apply_transforms=False,
         target_formats=set(formats),
         target_versions=set(versions),
-        export_ytds=bool(export_ytd_name),
-        export_ytds_include="SELECTED",
+        export_ytds=False,
         export_ytyps=False,
         export_ymaps=False,
     )
-    if export_ytd_name:
-        select_txd(scene, export_ytd_name)
     with context.temp_override(scene=scene, view_layer=view_layer, selected_objects=selected,
                                active_object=root_obj, object=root_obj):
         return bpy.ops.sollumz.export_assets(**kwargs)

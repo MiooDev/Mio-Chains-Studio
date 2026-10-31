@@ -1,249 +1,414 @@
-"""Section 3 : matériaux Sollumz, textures, préréglages réutilisables."""
+"""Étapes 3 et 4 : matériaux Sollumz appliqués aux seules faces sélectionnées, Value Parameters, presets.
+
+« Ped — sans glow » et « Ped Emissive — avec glow » correspondent à des shaders réels de Sollumz,
+réglables (par défaut ped.sps et ped_emissive.sps, dont les entrées ont été vérifiées dans Sollumz 2.9.0).
+"""
 
 import json
 import os
 
+import bmesh
 import bpy
+import numpy as np
 
+from . import presets
 from . import sollumz_bridge as szb
-from .prefs import addon_prefs
+from . import teef
 from .utils import (
     McsError,
-    ROLE_LABELS,
     abspath,
-    component_objects,
     get_project,
-    is_power_of_two,
+    hash_strings,
+    same_path,
     tag,
 )
 
-NON_COLOR_SAMPLERS = {"BumpSampler", "SpecSampler"}
-
-
-def _carry_over_image(mat):
-    """Image reliée à la couleur de base d'un matériau non Sollumz (ex. matériau .mtl de l'OBJ)."""
-    if mat is None or mat.node_tree is None:
-        return None
-    for node in mat.node_tree.nodes:
-        if node.bl_idname == "ShaderNodeBsdfPrincipled":
-            sock = node.inputs.get("Base Color")
-            if sock and sock.is_linked:
-                src = sock.links[0].from_node
-                if src.bl_idname == "ShaderNodeTexImage" and src.image and src.image.filepath:
-                    return src.image
-    return None
-
-
-def setup_materials(proj):
-    """Crée ou convertit les matériaux de chaque composant selon le shader choisi."""
-    szb.require()
-    done = []
-    objs = component_objects(proj)
-    if not objs:
-        raise McsError("Aucun composant : créez le pendentif ou définissez la chaîne.")
-    for obj, role in objs:
-        filename = proj.shader_for(role)
-        if szb.find_shader(filename) is None:
-            raise McsError(f"Shader « {filename} » inconnu de Sollumz ({ROLE_LABELS[role]}).")
-        mesh = obj.data
-        if len(mesh.materials) == 0:
-            mesh.materials.append(None)
-        for i, mat in enumerate(mesh.materials):
-            if szb.is_sollumz_material(mat):
-                if szb.material_shader(mat) != filename:
-                    szb.change_shader(mat, filename)
-                    done.append(f"{obj.name} : {mat.name} → {filename}")
-                continue
-            carried = _carry_over_image(mat)
-            suffix = f"_{i}" if len(mesh.materials) > 1 else ""
-            new = szb.create_material(filename, f"MCS_{role}{suffix}")
-            tag(new, proj, role=role)
-            if carried is not None:
-                node = new.node_tree.nodes.get("DiffuseSampler")
-                if node is not None:
-                    node.image = carried
-            mesh.materials[i] = new
-            done.append(f"{obj.name} : nouveau matériau {new.name} ({filename})")
-        for mat in mesh.materials:
-            szb.update_mesh_attributes(obj, mat)
-    return done
-
-
-def component_materials(proj, roles=None):
-    """[(objet, rôle, index, matériau)] pour les matériaux Sollumz des composants."""
-    result = []
-    for obj, role in component_objects(proj) if roles is None else component_objects(proj, roles):
-        for i, mat in enumerate(obj.data.materials):
-            if szb.is_sollumz_material(mat):
-                result.append((obj, role, i, mat))
-    return result
-
-
-def unique_materials(proj):
-    seen, result = set(), []
-    for obj, role, i, mat in component_materials(proj):
-        if mat.name not in seen:
-            seen.add(mat.name)
-            result.append((mat, role))
-    return result
-
-
-def image_is_real(image):
-    return image is not None and bool(image.filepath)
-
-
-def image_file_ok(image):
-    if image is None:
-        return False
-    if image.packed_file is not None:
-        return True
-    return bool(image.filepath) and os.path.isfile(abspath(image.filepath))
-
-
-def texture_issues(mat, prefs):
-    """Problèmes de textures d'un matériau Sollumz : [(sévérité, message, correction)]."""
-    issues = []
-    used = set(szb.shader_texture_params(szb.material_shader(mat)))
-    for node in szb.texture_nodes(mat):
-        if node.name not in used:
-            continue
-        img = node.image
-        label = f"{mat.name} › {node.name}"
-        if not image_is_real(img):
-            sev = "ERROR" if node.name == "DiffuseSampler" else "INFO"
-            msg = f"{label} : aucune texture." + ("" if sev == "ERROR" else " Laissée vide (comme dans votre référence).")
-            issues.append((sev, msg, "Choisissez une image." if sev == "ERROR" else ""))
-            continue
-        if not image_file_ok(img):
-            issues.append(("ERROR", f"{label} : fichier introuvable ({abspath(img.filepath)}).",
-                           "Corrigez le chemin ou choisissez une autre image."))
-            continue
-        w, h = img.size
-        if w == 0 or h == 0:
-            issues.append(("ERROR", f"{label} : image illisible.", "Vérifiez le fichier."))
-            continue
-        if not (is_power_of_two(w) and is_power_of_two(h)):
-            issues.append(("WARNING", f"{label} : {w}×{h} n'est pas une puissance de deux.",
-                           "Redimensionnez (ex. 512, 1024) avant la conversion DDS."))
-        limit = prefs.texture_warning if prefs else 2048
-        if max(w, h) > limit:
-            issues.append(("WARNING", f"{label} : {w}×{h} dépasse votre seuil de {limit} px.", ""))
-        if node.texture_properties.embedded and not abspath(img.filepath).lower().endswith(".dds") \
-                and img.packed_file is None:
-            issues.append(("ERROR", f"{label} : texture intégrée au YDD mais pas au format DDS.",
-                           "Sollumz n'intègre que des DDS : convertissez-la ou décochez « intégrée »."))
-    return issues
-
-
-def assign_texture(proj, mat_name, sampler, filepath):
-    mat = bpy.data.materials.get(mat_name)
-    if not szb.is_sollumz_material(mat):
-        raise McsError(f"Matériau Sollumz « {mat_name} » introuvable.")
-    node = mat.node_tree.nodes.get(sampler)
-    if node is None or node.bl_idname != "ShaderNodeTexImage":
-        raise McsError(f"Le shader de {mat_name} n'a pas d'entrée {sampler}.")
-    path = abspath(filepath)
-    if not os.path.isfile(path):
-        raise McsError(f"Image introuvable : {path}")
-    try:
-        img = bpy.data.images.load(path, check_existing=True)
-    except RuntimeError as exc:
-        raise McsError(f"Image illisible : {exc}") from exc
-    if sampler in NON_COLOR_SAMPLERS:
-        img.colorspace_settings.name = "Non-Color"
-    node.image = img
-    return img
+SAMPLERS = presets.SAMPLERS
+REQUIRED_EMBEDDED = ("BumpSampler", "SpecSampler")
 
 
 # ---------------------------------------------------------------------------
-# Préréglages
+# Description du matériau à appliquer
 # ---------------------------------------------------------------------------
 
-def preset_path(name):
-    prefs = addon_prefs()
-    folder = prefs.presets_folder() if prefs else bpy.utils.user_resource("CONFIG", path="mio_chain_studio", create=True)
-    safe = "".join(c for c in name if c.isalnum() or c in "-_ ").strip()
-    if not safe:
-        raise McsError("Nom de préréglage invalide.")
-    return os.path.join(folder, safe + ".json")
-
-
-def list_presets():
-    prefs = addon_prefs()
-    if prefs is None:
-        return []
-    folder = prefs.presets_folder()
-    return sorted(os.path.splitext(f)[0] for f in os.listdir(folder) if f.endswith(".json"))
-
-
-def capture_preset(mat):
-    data = {"version": 1, "shader": szb.material_shader(mat), "params": {}, "textures": {}, "embedded": {}}
-    for node in mat.node_tree.nodes:
-        if node.bl_idname == "SOLLUMZ_NT_SHADER_Parameter":
-            data["params"][node.name] = [float(o.default_value) for o in node.outputs]
-        elif node.bl_idname == "ShaderNodeTexImage" and image_is_real(node.image):
-            data["textures"][node.name] = abspath(node.image.filepath)
-            data["embedded"][node.name] = bool(node.texture_properties.embedded)
+def spec_from_ui(proj):
+    """Description complète (même format qu'un preset) selon le mode Preset ou Personnalisé."""
+    shader = proj.shader_for_kind()
+    if proj.mat_mode == "PRESET":
+        if not proj.preset_name:
+            raise McsError("Choisissez un preset.")
+        data = presets.load(proj.preset_name)
+        if data["shader"] != shader:
+            raise McsError(f"Le preset « {proj.preset_name} » utilise {data['shader']} alors que le type choisi "
+                           f"correspond à {shader}. Changez de type ou de preset.")
+    else:
+        data = {"version": presets.FORMAT, "shader": shader, "textures": {}, "params": {}}
+        if not proj.diffuse_path:
+            raise McsError("Choisissez la texture DiffuseSampler.")
+        data["textures"]["DiffuseSampler"] = {"path": abspath(proj.diffuse_path),
+                                              "embedded": proj.diffuse_embedded, "colorspace": "sRGB"}
+        data["textures"]["BumpSampler"] = {"path": abspath(proj.bump_path) if proj.bump_path else teef.path_of("bump"),
+                                           "embedded": True, "colorspace": "Non-Color"}
+        data["textures"]["SpecSampler"] = {"path": abspath(proj.spec_path) if proj.spec_path else teef.path_of("spec"),
+                                           "embedded": True, "colorspace": None}
+    # Exigences quel que soit le mode : Bump et Spec intégrés, Bump en Non-Color.
+    for sampler in REQUIRED_EMBEDDED:
+        if sampler in data["textures"]:
+            data["textures"][sampler]["embedded"] = True
+    if "BumpSampler" in data["textures"]:
+        data["textures"]["BumpSampler"]["colorspace"] = "Non-Color"
     return data
 
 
-def apply_preset(proj, mat, data):
-    """Applique un préréglage ; retourne la liste des textures introuvables."""
-    shader = data.get("shader")
-    if not shader or szb.find_shader(shader) is None:
-        raise McsError(f"Préréglage invalide : shader « {shader} » inconnu de Sollumz.")
+def validate(data, preset_name=None):
+    shader = data["shader"]
+    if szb.find_shader(shader) is None:
+        raise McsError(f"Shader « {shader} » inconnu de Sollumz.")
+    available = set(szb.shader_texture_params(shader))
+    for sampler in SAMPLERS:
+        if sampler not in available:
+            raise McsError(f"Le shader {shader} n'a pas d'entrée {sampler}.")
+        tex = data["textures"].get(sampler)
+        if not tex or not tex.get("path"):
+            where = f" dans le preset « {preset_name} »" if preset_name else ""
+            raise McsError(f"Texture {sampler} non définie{where}.")
+        if not os.path.isfile(tex["path"]):
+            hint = (" Relocalisez-la avec « Relocaliser » (étape 4)." if preset_name else
+                    " Vérifiez le dossier Teef ou choisissez un autre fichier.")
+            raise McsError(f"{sampler} : fichier introuvable ({tex['path']}).{hint}")
+        if tex.get("embedded") and not tex["path"].lower().endswith(".dds"):
+            raise McsError(f"{sampler} est intégrée (Embedded) mais n'est pas un DDS : Sollumz n'intègre que des DDS.")
+
+
+def material_key(data):
+    return hash_strings([json.dumps(data, sort_keys=True)])
+
+
+# ---------------------------------------------------------------------------
+# Images : espace colorimétrique sans effet de bord
+# ---------------------------------------------------------------------------
+
+def _image_users_outside(img, mat):
+    for m in bpy.data.materials:
+        if m == mat or m.node_tree is None:
+            continue
+        for n in m.node_tree.nodes:
+            if n.bl_idname == "ShaderNodeTexImage" and n.image == img:
+                return True
+    return False
+
+
+def get_image(path, colorspace, mat):
+    """Image du fichier `path` dans l'espace demandé, sans modifier une image partagée avec d'autres matériaux."""
+    candidates = [i for i in bpy.data.images if same_path(i.filepath, path)]
+    for img in candidates:
+        if colorspace is None or img.colorspace_settings.name == colorspace:
+            return img
+    for img in candidates:
+        if not _image_users_outside(img, mat):
+            img.colorspace_settings.name = colorspace
+            return img
+    try:
+        img = bpy.data.images.load(path, check_existing=False)
+    except RuntimeError as exc:
+        raise McsError(f"Image illisible ({os.path.basename(path)}) : {exc}") from exc
+    if colorspace:
+        img.colorspace_settings.name = colorspace
+    return img
+
+
+def configure_material(mat, data):
+    shader = data["shader"]
     if szb.material_shader(mat) != shader:
         szb.change_shader(mat, shader)
-    for node in mat.node_tree.nodes:
-        if node.bl_idname == "SOLLUMZ_NT_SHADER_Parameter" and node.name in data.get("params", {}):
-            values = data["params"][node.name]
-            if len(values) == len(node.outputs):
-                for out, v in zip(node.outputs, values):
-                    out.default_value = v
-    missing = []
-    for sampler, path in data.get("textures", {}).items():
-        try:
-            assign_texture(proj, mat.name, sampler, path)
-            mat.node_tree.nodes[sampler].texture_properties.embedded = data.get("embedded", {}).get(sampler, False)
-        except McsError:
-            missing.append(path)
-    return missing
+    for node in szb.texture_nodes(mat):
+        tex = data["textures"].get(node.name)
+        if tex is None:
+            continue
+        node.image = get_image(tex["path"], tex.get("colorspace"), mat)
+        node.texture_properties.embedded = bool(tex.get("embedded"))
+    for name, values in data.get("params", {}).items():
+        node = szb.param_node(mat, name)
+        if node is not None and len(values) == len(node.outputs):
+            for out, v in zip(node.outputs, values):
+                out.default_value = v
+
+
+def get_or_create_material(proj, data, label):
+    key = material_key(data)
+    for mat in bpy.data.materials:
+        if mat.get("mcs_mat_key") == key and mat.get("mcs_project") == proj.project_id and szb.is_sollumz_material(mat):
+            configure_material(mat, data)
+            return mat, False
+    mat = szb.create_material(data["shader"], f"MCS_{label}")
+    tag(mat, proj, role="materiau", mcs_mat_key=key)
+    configure_material(mat, data)
+    return mat, True
+
+
+# ---------------------------------------------------------------------------
+# Application aux faces sélectionnées
+# ---------------------------------------------------------------------------
+
+def _uv_array(mesh, name):
+    layer = mesh.uv_layers.get(name)
+    if layer is None:
+        return None
+    uv = np.empty(len(mesh.loops) * 2, dtype=np.float32)
+    layer.data.foreach_get("uv", uv)
+    return uv.reshape(-1, 2)
+
+
+def apply_to_selected_faces(context, proj):
+    szb.require()
+    obj = context.edit_object
+    if obj is None or obj.type != "MESH":
+        raise McsError("Passez en Edit Mode sur le maillage et sélectionnez les faces à traiter.")
+    data = spec_from_ui(proj)
+    validate(data, proj.preset_name if proj.mat_mode == "PRESET" else None)
+    bm = bmesh.from_edit_mesh(obj.data)
+    if not any(f.select for f in bm.faces):
+        raise McsError("Aucune face sélectionnée.")
+    bpy.ops.object.mode_set(mode="OBJECT")
+    try:
+        me = obj.data
+        n = len(me.polygons)
+        sel = np.empty(n, dtype=bool)
+        me.polygons.foreach_get("select", sel)
+        mat_before = np.empty(n, dtype=np.int32)
+        me.polygons.foreach_get("material_index", mat_before)
+        uv_name = szb.uv_map_name(0)
+        if uv_name not in me.uv_layers:
+            if len(me.uv_layers):
+                me.uv_layers[0].name = uv_name       # renommage seulement : valeurs inchangées
+            else:
+                me.uv_layers.new(name=uv_name)
+        uv_before = _uv_array(me, uv_name)
+        label = proj.preset_name if proj.mat_mode == "PRESET" else ("glow" if proj.mat_kind == "EMISSIVE" else "ped")
+        mat, created = get_or_create_material(proj, data, label)
+        slots = list(me.materials)
+        if mat in slots:
+            idx = slots.index(mat)
+        else:
+            me.materials.append(mat)
+            idx = len(me.materials) - 1
+        new_idx = mat_before.copy()
+        new_idx[sel] = idx
+        me.polygons.foreach_set("material_index", new_idx)
+        szb.sz("tools.meshhelper").mesh_add_missing_uv_maps(me)   # ex. UVMap 1 exigée par ped_emissive
+        me.uv_layers.active = me.uv_layers[uv_name]
+    finally:
+        bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.uv.cube_project(cube_size=proj.cube_size, correct_aspect=proj.cube_correct_aspect,
+                            clip_to_bounds=proj.cube_clip_to_bounds, scale_to_bounds=proj.cube_scale_to_bounds)
+    bpy.ops.object.mode_set(mode="OBJECT")
+    try:
+        problems = verify_application(obj, sel, mat_before, uv_before, idx, mat)
+    finally:
+        bpy.ops.object.mode_set(mode="EDIT")
+    if problems:
+        raise McsError("Vérification en échec : " + " ".join(problems))
+    return mat, created, int(sel.sum())
+
+
+def selected_loops(me, sel):
+    """Masque des coins de face appartenant aux faces sélectionnées."""
+    starts = np.empty(len(me.polygons), dtype=np.int32)
+    totals = np.empty(len(me.polygons), dtype=np.int32)
+    me.polygons.foreach_get("loop_start", starts)
+    me.polygons.foreach_get("loop_total", totals)
+    mask = np.zeros(len(me.loops), dtype=bool)
+    for p in np.nonzero(sel)[0]:
+        mask[starts[p]:starts[p] + totals[p]] = True
+    return mask
+
+
+def verify_application(obj, sel, mat_before, uv_before, idx, mat):
+    me = obj.data
+    problems = []
+    after = np.empty(len(me.polygons), dtype=np.int32)
+    me.polygons.foreach_get("material_index", after)
+    if not (after[sel] == idx).all():
+        problems.append("des faces sélectionnées n'ont pas reçu le matériau.")
+    if not (after[~sel] == mat_before[~sel]).all():
+        problems.append("des faces non sélectionnées ont changé de matériau.")
+    uv_after = _uv_array(me, szb.uv_map_name(0))
+    if uv_before is not None and uv_after is not None:
+        if not np.allclose(uv_after[~selected_loops(me, sel)], uv_before[~selected_loops(me, sel)]):
+            problems.append("des UV de faces non sélectionnées ont changé.")
+    for node in szb.texture_nodes(mat):
+        if node.name in REQUIRED_EMBEDDED and not node.texture_properties.embedded:
+            problems.append(f"{node.name} n'est pas Embedded.")
+        if node.name == "BumpSampler" and (node.image is None or node.image.colorspace_settings.name != "Non-Color"):
+            problems.append("l'image BumpSampler n'est pas en Non-Color.")
+    return problems
+
+
+# ---------------------------------------------------------------------------
+# Value Parameters
+# ---------------------------------------------------------------------------
+
+def value_parameters(mat):
+    """[(nom, nœud)] des paramètres numériques du shader réellement présents dans le matériau."""
+    shader = szb.find_shader(szb.material_shader(mat)) if szb.is_sollumz_material(mat) else None
+    if shader is None:
+        return []
+    out = []
+    for p in shader.parameters:
+        if str(getattr(p.type, "value", p.type)).lower() == "texture" or getattr(p, "hidden", False):
+            continue
+        node = szb.param_node(mat, p.name)
+        if node is not None:
+            out.append((p.name, node))
+    return out
 
 
 # ---------------------------------------------------------------------------
 # Opérateurs
 # ---------------------------------------------------------------------------
 
-class MIO_OT_materials_setup(bpy.types.Operator):
-    bl_idname = "mio_chain.materials_setup"
-    bl_label = "Créer / configurer les matériaux"
-    bl_description = "Crée les matériaux Sollumz manquants et applique le shader choisi à chaque composant"
+class MIO_OT_apply_faces(bpy.types.Operator):
+    bl_idname = "mio_chain.apply_faces"
+    bl_label = "Appliquer aux faces sélectionnées"
+    bl_description = ("Crée ou réutilise le matériau Sollumz, l'assigne aux faces sélectionnées uniquement, "
+                      "règle les textures (Bump et Spec Embedded, Bump en Non-Color) et projette leurs UV en cube")
     bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return context.edit_object is not None and context.edit_object.type == "MESH"
 
     def execute(self, context):
         proj = get_project(context)
         try:
-            done = setup_materials(proj)
+            mat, created, count = apply_to_selected_faces(context, proj)
         except McsError as exc:
+            if context.mode != "EDIT_MESH" and context.active_object and context.active_object.type == "MESH":
+                bpy.ops.object.mode_set(mode="EDIT")
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        mats = component_materials(proj)
-        objs = component_objects(proj)
-        missing = [o.name for o, r in objs if not any(szb.is_sollumz_material(m) for m in o.data.materials)]
-        if missing:
-            self.report({"ERROR"}, "Sans matériau Sollumz : " + ", ".join(missing))
-            return {"CANCELLED"}
-        self.report({"INFO"}, f"{len(mats)} matériau(x) Sollumz en place. " + ("; ".join(done) if done else "Aucun changement."))
+        verb = "créé" if created else "réutilisé"
+        self.report({"INFO"}, f"{mat.name} ({szb.material_shader(mat)}) {verb}, appliqué à {count} face(s), "
+                              "UV projetées en cube sur ces faces uniquement.")
         return {"FINISHED"}
 
 
-class MIO_OT_texture_assign(bpy.types.Operator):
-    bl_idname = "mio_chain.texture_assign"
-    bl_label = "Choisir une image"
-    bl_description = "Associe un fichier image à cette entrée du shader"
+class MIO_OT_preset_save(bpy.types.Operator):
+    bl_idname = "mio_chain.preset_save"
+    bl_label = "Enregistrer comme preset"
+    bl_description = "Enregistre shader, textures, Embedded, espaces colorimétriques et paramètres du matériau actif"
+
+    overwrite: bpy.props.BoolProperty(options={"HIDDEN", "SKIP_SAVE"})
+
+    def invoke(self, context, event):
+        proj = get_project(context)
+        try:
+            exists = os.path.exists(presets.path_of(proj.new_preset_name))
+        except McsError:
+            exists = False
+        if exists:
+            self.overwrite = True
+            return context.window_manager.invoke_confirm(self, event, title="Remplacer le preset ?",
+                                                         message=f"« {proj.new_preset_name} » existe déjà.")
+        return self.execute(context)
+
+    def execute(self, context):
+        proj = get_project(context)
+        obj = context.active_object
+        mat = obj.active_material if obj else None
+        if not szb.is_sollumz_material(mat):
+            self.report({"ERROR"}, "Le matériau actif n'est pas un matériau Sollumz.")
+            return {"CANCELLED"}
+        try:
+            if os.path.exists(presets.path_of(proj.new_preset_name)) and not self.overwrite:
+                raise McsError(f"Le preset « {proj.new_preset_name} » existe déjà.")
+            data = presets.capture(mat)
+            path = presets.save(proj.new_preset_name, data)
+        except McsError as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+        complete, missing, absent = presets.status(data)
+        msg = f"Preset enregistré : {path}"
+        if not complete:
+            self.report({"WARNING"}, msg + " — incomplet : " + ", ".join(absent + [s for s, p in missing]))
+        else:
+            self.report({"INFO"}, msg)
+        proj.preset_name = presets.safe_name(proj.new_preset_name)
+        return {"FINISHED"}
+
+
+class MIO_OT_preset_apply(bpy.types.Operator):
+    bl_idname = "mio_chain.preset_apply"
+    bl_label = "Appliquer un preset"
+    bl_description = "Applique le preset choisi au matériau actif (shader, textures, paramètres)"
     bl_options = {"REGISTER", "UNDO"}
 
-    material: bpy.props.StringProperty(options={"HIDDEN"})
+    def execute(self, context):
+        proj = get_project(context)
+        obj = context.active_object
+        mat = obj.active_material if obj else None
+        if not szb.is_sollumz_material(mat):
+            self.report({"ERROR"}, "Le matériau actif n'est pas un matériau Sollumz.")
+            return {"CANCELLED"}
+        try:
+            data = presets.load(proj.preset_name)
+            complete, missing, absent = presets.status(data)
+            if missing:
+                raise McsError("Textures introuvables : " + ", ".join(f"{s} ({p})" for s, p in missing) +
+                               ". Relocalisez-les avant d'appliquer.")
+            configure_material(mat, data)
+        except McsError as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+        mat["mcs_mat_key"] = material_key(data)
+        self.report({"INFO"}, f"Preset « {proj.preset_name} » appliqué à {mat.name}.")
+        return {"FINISHED"}
+
+
+class MIO_OT_preset_duplicate(bpy.types.Operator):
+    bl_idname = "mio_chain.preset_duplicate"
+    bl_label = "Dupliquer le preset"
+    bl_description = "Copie le preset choisi sous le nom indiqué"
+
+    def execute(self, context):
+        proj = get_project(context)
+        new = proj.new_preset_name if proj.new_preset_name != proj.preset_name else f"{proj.preset_name}_copie"
+        try:
+            path = presets.duplicate(proj.preset_name, new)
+        except McsError as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+        proj.preset_name = presets.safe_name(new)
+        self.report({"INFO"}, f"Preset dupliqué : {path}")
+        return {"FINISHED"}
+
+
+class MIO_OT_preset_delete(bpy.types.Operator):
+    bl_idname = "mio_chain.preset_delete"
+    bl_label = "Supprimer le preset"
+    bl_description = "Supprime définitivement le fichier du preset choisi"
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_confirm(self, event, title="Supprimer le preset ?",
+                                                     message=f"« {get_project(context).preset_name} » sera supprimé.")
+
+    def execute(self, context):
+        proj = get_project(context)
+        try:
+            presets.delete(proj.preset_name)
+        except McsError as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"Preset « {proj.preset_name} » supprimé.")
+        proj.preset_name = ""
+        return {"FINISHED"}
+
+
+class MIO_OT_preset_relocate(bpy.types.Operator):
+    bl_idname = "mio_chain.preset_relocate"
+    bl_label = "Relocaliser"
+    bl_description = "Indique le nouvel emplacement d'une texture manquante du preset"
+
     sampler: bpy.props.StringProperty(options={"HIDDEN"})
     filepath: bpy.props.StringProperty(subtype="FILE_PATH")
     filter_image: bpy.props.BoolProperty(default=True, options={"HIDDEN"})
@@ -256,103 +421,13 @@ class MIO_OT_texture_assign(bpy.types.Operator):
     def execute(self, context):
         proj = get_project(context)
         try:
-            img = assign_texture(proj, self.material, self.sampler, self.filepath)
+            presets.relocate(proj.preset_name, self.sampler, self.filepath)
         except McsError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        w, h = img.size
-        self.report({"INFO"}, f"{self.sampler} ← {os.path.basename(img.filepath)} ({w}×{h}), "
-                              f"nom de texture : {szb.texture_name_of_image(img)}")
+        self.report({"INFO"}, f"{self.sampler} relocalisée : {self.filepath}")
         return {"FINISHED"}
 
 
-class MIO_OT_texture_clear(bpy.types.Operator):
-    bl_idname = "mio_chain.texture_clear"
-    bl_label = "Vider"
-    bl_description = "Retire l'image de cette entrée (l'image reste dans le fichier)"
-    bl_options = {"REGISTER", "UNDO"}
-
-    material: bpy.props.StringProperty(options={"HIDDEN"})
-    sampler: bpy.props.StringProperty(options={"HIDDEN"})
-
-    def execute(self, context):
-        mat = bpy.data.materials.get(self.material)
-        node = mat.node_tree.nodes.get(self.sampler) if mat and mat.node_tree else None
-        if node is None:
-            return {"CANCELLED"}
-        node.image = None
-        return {"FINISHED"}
-
-
-class MIO_OT_preset_save(bpy.types.Operator):
-    bl_idname = "mio_chain.preset_save"
-    bl_label = "Enregistrer le préréglage"
-    bl_description = "Enregistre shader, paramètres et chemins de textures de ce matériau (JSON)"
-
-    material: bpy.props.StringProperty(options={"HIDDEN"})
-
-    def execute(self, context):
-        proj = get_project(context)
-        mat = bpy.data.materials.get(self.material)
-        if not szb.is_sollumz_material(mat):
-            self.report({"ERROR"}, "Choisissez un matériau Sollumz.")
-            return {"CANCELLED"}
-        try:
-            path = preset_path(proj.preset_name)
-        except McsError as exc:
-            self.report({"ERROR"}, str(exc))
-            return {"CANCELLED"}
-        data = capture_preset(mat)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        with open(path, encoding="utf-8") as f:
-            ok = json.load(f).get("shader") == data["shader"]
-        if not ok:
-            self.report({"ERROR"}, f"Écriture du préréglage non vérifiée : {path}")
-            return {"CANCELLED"}
-        self.report({"INFO"}, f"Préréglage enregistré : {path}")
-        return {"FINISHED"}
-
-
-def _preset_items(self, context):
-    items = [(n, n, "") for n in list_presets()]
-    _preset_items.cache = items or [("", "(aucun préréglage)", "")]
-    return _preset_items.cache
-
-
-class MIO_OT_preset_load(bpy.types.Operator):
-    bl_idname = "mio_chain.preset_load"
-    bl_label = "Appliquer un préréglage"
-    bl_description = "Applique un préréglage enregistré à ce matériau"
-    bl_options = {"REGISTER", "UNDO"}
-    bl_property = "preset"
-
-    material: bpy.props.StringProperty(options={"HIDDEN"})
-    preset: bpy.props.EnumProperty(name="Préréglage", items=_preset_items)
-
-    def invoke(self, context, event):
-        context.window_manager.invoke_search_popup(self)
-        return {"RUNNING_MODAL"}
-
-    def execute(self, context):
-        proj = get_project(context)
-        mat = bpy.data.materials.get(self.material)
-        if not szb.is_sollumz_material(mat) or not self.preset:
-            self.report({"ERROR"}, "Matériau ou préréglage invalide.")
-            return {"CANCELLED"}
-        try:
-            with open(preset_path(self.preset), encoding="utf-8") as f:
-                data = json.load(f)
-            missing = apply_preset(proj, mat, data)
-        except (OSError, ValueError, McsError) as exc:
-            self.report({"ERROR"}, f"Préréglage illisible : {exc}")
-            return {"CANCELLED"}
-        if missing:
-            self.report({"WARNING"}, "Préréglage appliqué, textures introuvables : " + ", ".join(missing))
-        else:
-            self.report({"INFO"}, f"Préréglage « {self.preset} » appliqué à {mat.name}.")
-        return {"FINISHED"}
-
-
-CLASSES = (MIO_OT_materials_setup, MIO_OT_texture_assign, MIO_OT_texture_clear, MIO_OT_preset_save,
-           MIO_OT_preset_load)
+CLASSES = (MIO_OT_apply_faces, MIO_OT_preset_save, MIO_OT_preset_apply, MIO_OT_preset_duplicate,
+           MIO_OT_preset_delete, MIO_OT_preset_relocate)

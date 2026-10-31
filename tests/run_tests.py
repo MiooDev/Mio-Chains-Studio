@@ -1,35 +1,35 @@
-"""Tests de bout en bout dans Blender (module bpy) avec Sollumz réellement installé.
+"""Tests de bout en bout dans Blender (module bpy) avec Sollumz réellement installé et le dossier Teef.
 
 Usage :
-    python -I tests/run_tests.py -- <dossier_de_travail> [chemin/vers/teef_000_u.ydd.xml]
+    python -I tests/run_tests.py -- <dossier_de_travail> <dossier_Teef>
 
-Prérequis : Blender (bpy) 5.2.x, Sollumz installé dans le dépôt d'extensions « user_default »,
-Mio Chain Studio installé dans ce même dépôt (dossier mio_chain_studio). ImageMagick facultatif (DDS).
-Les données de test (chaîne, armature, display) sont SYNTHÉTIQUES : elles ne remplacent pas vos fichiers.
+Prérequis : bpy 5.2.x, Sollumz et Mio Chain Studio installés dans le dépôt d'extensions « user_default ».
+Le SVG, la chaîne OBJ et le display sont SYNTHÉTIQUES ; les références Teef sont les vraies.
 """
 
 import json
 import math
 import os
 import shutil
+import subprocess
 import sys
 import traceback
 
 import bpy
+import bmesh
 import numpy as np
 from mathutils import Vector
 
 ARGS = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 WORK = os.path.abspath(ARGS[0] if ARGS else "mcs_test_work")
-REF_YDD = ARGS[1] if len(ARGS) > 1 else ""
+TEEF = os.path.abspath(ARGS[1]) if len(ARGS) > 1 else ""
 ADDON = "bl_ext.user_default.mio_chain_studio"
 SOLLUMZ = "bl_ext.user_default.sollumz"
-
 RESULTS = []
 
 
 def check(name, cond, detail=""):
-    RESULTS.append((name, bool(cond), detail))
+    RESULTS.append((name, bool(cond), str(detail)))
     print(("  OK  " if cond else "  ÉCHEC ") + name + (f" — {detail}" if detail and not cond else ""))
     return cond
 
@@ -37,7 +37,7 @@ def check(name, cond, detail=""):
 def run(op, **kw):
     try:
         return getattr(bpy.ops.mio_chain, op)(**kw)
-    except RuntimeError as exc:  # opérateur ayant rapporté une erreur
+    except RuntimeError as exc:
         return {"ERROR: " + str(exc).splitlines()[0]}
 
 
@@ -45,31 +45,58 @@ def proj():
     return bpy.data.scenes["Scene"].mio_chain
 
 
-def count_role(role):
-    return sum(1 for o in bpy.data.objects if o.get("mcs_role") == role and o.get("mcs_generated")
-               and o.get("mcs_project") == proj().project_id and not o.get("mcs_export") and not o.get("mcs_preview"))
+def select_only(*objs, active=None):
+    if bpy.context.mode != "OBJECT":
+        bpy.ops.object.mode_set(mode="OBJECT")
+    for o in bpy.context.view_layer.objects:
+        o.select_set(False)
+    for o in objs:
+        o.hide_set(False)
+        o.select_set(True)
+    bpy.context.view_layer.objects.active = active or (objs[0] if objs else None)
+
+
+def edit_select_faces(obj, predicate):
+    """Passe en Edit Mode sur obj et sélectionne les faces vérifiant predicate(face bmesh)."""
+    select_only(obj)
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.context.tool_settings.mesh_select_mode = (False, False, True)
+    bm = bmesh.from_edit_mesh(obj.data)
+    for f in bm.faces:
+        f.select_set(False)
+    n = 0
+    for f in bm.faces:
+        if predicate(f):
+            f.select_set(True)
+            n += 1
+    bmesh.update_edit_mesh(obj.data)
+    return n
+
+
+def heights_along(obj, d=(0, 0, 1)):
+    co = np.empty(len(obj.data.vertices) * 3)
+    obj.data.vertices.foreach_get("co", co)
+    m = np.array(obj.matrix_world)
+    w = co.reshape(-1, 3) @ m[:3, :3].T + m[:3, 3]
+    h = w @ np.array(d)
+    return float(h.min()), float(h.max())
 
 
 # ---------------------------------------------------------------------------
-# Faux layout pour exécuter le code de dessin des panneaux et valider les noms de propriétés
+# Faux layout : exécute le code de dessin des panneaux et valide propriétés et opérateurs
 # ---------------------------------------------------------------------------
 
 class FakeLayout:
-    def __init__(self):
-        self.calls = 0
-
     def __getattr__(self, name):
         def fn(*args, **kw):
-            self.calls += 1
-            if name in ("prop", "prop_search", "prop_enum") and len(args) >= 2:
+            if name in ("prop", "prop_search") and len(args) >= 2:
                 data, prop = args[0], args[1]
                 if prop not in data.bl_rna.properties:
                     raise AttributeError(f"Propriété inconnue {type(data).__name__}.{prop}")
             if name == "operator":
-                idname = args[0]
-                mod, opn = idname.split(".")
+                mod, opn = args[0].split(".")
                 if not hasattr(getattr(bpy.ops, mod), opn):
-                    raise AttributeError(f"Opérateur inconnu {idname}")
+                    raise AttributeError(f"Opérateur inconnu {args[0]}")
             return FakeLayout()
         return fn
 
@@ -81,9 +108,6 @@ def draw_all_panels():
     from bl_ext.user_default.mio_chain_studio import ui
     errors = []
     for cls in ui.CLASSES:
-        if not issubclass(cls, bpy.types.Panel):
-            continue
-
         class Fake(ui._Base):
             pass
         fake = Fake()
@@ -102,10 +126,17 @@ def draw_all_panels():
 # Données synthétiques
 # ---------------------------------------------------------------------------
 
-def make_png(path, color, size=256):
+SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="100" height="60" viewBox="0 0 100 60">
+  <rect id="fond" x="0" y="0" width="100" height="60" fill="#c0c0c0"/>
+  <path id="lettre" d="M10 10 H40 V50 H10 Z M20 20 V40 H30 V20 Z" fill="#000000"/>
+  <circle id="medaille" cx="70" cy="30" r="15" fill="#ffd700"/>
+  <rect id="detail" x="62" y="26" width="16" height="8" fill="#000"/>
+</svg>"""
+
+
+def make_png(path, color, size=64):
     img = bpy.data.images.new(os.path.basename(path), size, size, alpha=True)
-    px = np.tile(np.array(color, dtype=np.float32), size * size)
-    img.pixels.foreach_set(px)
+    img.pixels.foreach_set(np.tile(np.array(color, dtype=np.float32), size * size))
     img.filepath_raw = path
     img.file_format = "PNG"
     img.save()
@@ -113,64 +144,30 @@ def make_png(path, color, size=256):
 
 
 def make_chain_obj(path):
-    """Chaîne synthétique : anneaux disposés en U autour du cou (ordre de grandeur : votre référence)."""
-    import bmesh
     me = bpy.data.meshes.new("chaine_test")
     bm = bmesh.new()
-    n = 24
-    for i in range(n):
-        t = math.pi * (i / (n - 1))           # demi-boucle avant
-        x = 0.1 * math.cos(t)
-        y = -0.12 * math.sin(t)
-        z = 0.55 - 0.2 * math.sin(t)
-        res = bmesh.ops.create_circle(bm, cap_ends=False, radius=0.006, segments=8)
+    for i in range(12):
+        t = math.pi * i / 11
+        res = bmesh.ops.create_circle(bm, cap_ends=True, radius=0.006, segments=8)
         for v in res["verts"]:
-            v.co = Vector((v.co.x + x, v.co.y + y, v.co.z + z)) if i % 2 else Vector((v.co.x + x, v.co.z + y, v.co.y + z))
-    bmesh.ops.extrude_edge_only(bm, edges=bm.edges[:])
+            v.co = Vector((v.co.x + 0.1 * math.cos(t), -0.12 * math.sin(t), v.co.y + 0.55 - 0.2 * math.sin(t)))
     bm.to_mesh(me)
     bm.free()
-    me.uv_layers.new(name="UVMap")
+    uv = me.uv_layers.new(name="UVMap")
+    for i, d in enumerate(uv.data):
+        d.uv = ((i % 7) / 7, (i % 5) / 5)
+    mat = bpy.data.materials.new("Or_Chaine")
+    mat.diffuse_color = (1.0, 0.7, 0.1, 1.0)
+    me.materials.append(mat)
     obj = bpy.data.objects.new("chaine_test", me)
     bpy.context.scene.collection.objects.link(obj)
-    for o in bpy.context.view_layer.objects.selected:
-        o.select_set(False)
-    obj.select_set(True)
-    bpy.context.view_layer.objects.active = obj
-    bpy.ops.wm.obj_export(filepath=path, export_selected_objects=True, export_materials=False)
+    select_only(obj)
+    bpy.ops.wm.obj_export(filepath=path, export_selected_objects=True, export_materials=True, export_uv=True)
     bpy.data.objects.remove(obj)
     bpy.data.meshes.remove(me)
 
 
-def make_armature():
-    """Armature de TEST (pas le squelette du ped) et maillage pondéré servant de source de poids."""
-    arm_data = bpy.data.armatures.new("ARM_test")
-    arm = bpy.data.objects.new("Squelette_Test", arm_data)
-    bpy.context.scene.collection.objects.link(arm)
-    bpy.context.view_layer.objects.active = arm
-    bpy.ops.object.mode_set(mode="EDIT")
-    for name, head, tail, parent in (("SKEL_ROOT", (0, 0, 0), (0, 0, 0.1), None),
-                                     ("SKEL_Spine3", (0, 0, 0.25), (0, 0, 0.45), "SKEL_ROOT"),
-                                     ("SKEL_Neck_1", (0, 0, 0.45), (0, 0, 0.6), "SKEL_Spine3")):
-        b = arm_data.edit_bones.new(name)
-        b.head, b.tail = head, tail
-        if parent:
-            b.parent = arm_data.edit_bones[parent]
-    bpy.ops.object.mode_set(mode="OBJECT")
-    bpy.ops.mesh.primitive_cylinder_add(radius=0.13, depth=0.5, location=(0, 0, 0.45), vertices=24)
-    body = bpy.context.active_object
-    body.name = "Corps_Poids_Test"
-    neck, spine = body.vertex_groups.new(name="SKEL_Neck_1"), body.vertex_groups.new(name="SKEL_Spine3")
-    for v in body.data.vertices:
-        z = (body.matrix_world @ v.co).z
-        t = max(0.0, min(1.0, (z - 0.25) / 0.4))
-        neck.add([v.index], t, "REPLACE")
-        spine.add([v.index], 1 - t, "REPLACE")
-    return arm, body
-
-
 def make_display(path):
-    """Display synthétique écrit par un processus Blender séparé (voir make_display.py)."""
-    import subprocess
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "make_display.py")
     subprocess.run([sys.executable, "-I", script, "--", path, os.path.join(WORK, "absent")], check=True,
                    capture_output=True, timeout=300)
@@ -185,424 +182,452 @@ def main():
     print(f"Blender {bpy.app.version_string}")
     bpy.ops.preferences.addon_enable(module=SOLLUMZ)
     bpy.ops.preferences.addon_enable(module=ADDON)
-    check("Addon enregistré", ADDON in bpy.context.preferences.addons and hasattr(bpy.ops.mio_chain, "pendant_create"))
-    from bl_ext.user_default.mio_chain_studio import sollumz_bridge as szb, status, export as exp, atlas, effects, rigging, display, dds
-    info = szb.detect(refresh=True)
-    check("Sollumz détecté", info.ok and info.version == (2, 9, 0), f"{info.version} {info.errors}")
-    check("Format CW XML disponible", info.cwxml_available)
-
+    from bl_ext.user_default.mio_chain_studio import (sollumz_bridge as szb, teef, svg, rigging, export as exp,
+                                                     colors, presets, materials, display, status)
+    prefs = bpy.context.preferences.addons[ADDON].preferences
+    prefs.presets_dir = os.path.join(WORK, "presets")
+    check("Addon et Sollumz actifs", hasattr(bpy.ops.mio_chain, "svg_prepare") and szb.detect(refresh=True).ok,
+          szb.detect().errors)
+    check("Version Sollumz vérifiée (2.9.0)", szb.detect().version == (2, 9, 0), szb.detect().version)
     external = {o.name for o in bpy.data.objects}
-    display_path = os.path.join(WORK, "display.blend")
-    make_display(display_path)
-    check("Display synthétique écrit", os.path.isfile(display_path))
     bpy.ops.wm.save_as_mainfile(filepath=os.path.join(WORK, "projet.blend"))
 
-    # 1. Projet -------------------------------------------------------------
-    print("\n[1] Préparer le projet")
-    check("Initialiser", run("init_project") == {"FINISHED"})
+    # Teef ---------------------------------------------------------------------
+    print("\n[Teef]")
+    broken = os.path.join(WORK, "Teef_incomplet")
+    shutil.copytree(TEEF, broken)
+    os.remove(os.path.join(broken, "teef_000_u", "teef_spec_000.dds"))
+    prefs.teef_dir = broken
+    check("Dossier incomplet refusé", run("teef_check") != {"FINISHED"})
+    prefs.teef_dir = os.path.join(WORK, "inexistant")
+    check("Dossier absent refusé", run("teef_check") != {"FINISHED"})
+    prefs.teef_dir = TEEF
+    check("Dossier Teef vérifié", run("teef_check") == {"FINISHED"})
+    ok, info, issues = teef.check_folder(TEEF)
+    check("YFT : 128 os, SKEL_ROOT 0, SKEL_Spine3 38 tag 24818", ok and info["yft"]["bones"] == 128, issues)
+    check("YDD : teef_012_u, LOD High/Medium/Low, sans squelette",
+          info["ydd"]["drawables"] == ["teef_012_u"] and info["ydd"]["lods"] == ["High", "Medium", "Low"]
+          and not info["ydd"]["skeleton"])
+    check("Charger les références Teef", run("teef_load") == {"FINISHED"})
     p = proj()
-    check("Collections créées", p.coll_root and p.coll_sources and p.coll_jewel and p.coll_export)
-    check("Checklist CodeWalker initialisée", len(p.cw_checks) == len(exp.CW_ITEMS))
-    run("init_project")
-    check("Ré-initialisation sans doublon de collections",
-          sum(1 for c in bpy.data.collections if c.get("mcs_role") == "bijou") == 1)
+    root = p.ref_root
+    check("Squelette importé par Sollumz (squelette externe)", root and root.type == "ARMATURE"
+          and len(root.data.bones) == 128 and root.data.bones[0].name == "SKEL_ROOT"
+          and root.data.bones.find("SKEL_Spine3") == 38 and root.data.bones["SKEL_Spine3"].bone_properties.tag == 24818)
+    check("Mesh de référence « SKEL_ROOT » sous le drawable", p.ref_model and p.ref_model.name == "SKEL_ROOT"
+          and p.ref_model.type == "MESH" and p.ref_model.parent == p.ref_drawable)
+    check("Références : LOD High, Medium, Low", all(szb.lod_meshes(p.ref_model)[l] for l in
+                                                     ("sollumz_high", "sollumz_medium", "sollumz_low")))
+    check("Second chargement refusé sans « Recharger »", run("teef_load") != {"FINISHED"})
+    n_ref = len(teef.reference_objects(p))
+    check("Recharger sans doublon", run("teef_load", force=True) == {"FINISHED"} and len(teef.reference_objects(p)) == n_ref)
+    check("Nom d'origine rétabli après rechargement", p.ref_model.name == "SKEL_ROOT")
 
-    # 2. Pendentif ------------------------------------------------------------
-    print("\n[2] Pendentif texte")
-    p.text = "NO RULES"
-    p.use_plate = True
-    check("Créer le pendentif", run("pendant_create") == {"FINISHED"})
-    txt = p.pendant_text
-    check("Texte, plaque, bélière générés", txt and p.plate and p.bail)
-    tris = sum(len(o.data.polygons) for o in (txt, p.plate, p.bail))
-    check("Géométrie réelle (faces)", tris > 100, str(tris))
-    meshes_before = len(bpy.data.meshes)
-    for _ in range(3):
-        run("pendant_create")
-    check("Clics répétés : un seul texte/plaque/bélière",
-          count_role("texte") == 1 and count_role("plaque") == 1 and count_role("beliere") == 1)
-    check("Clics répétés : pas de maillages accumulés", len(bpy.data.meshes) == meshes_before,
-          f"{meshes_before} → {len(bpy.data.meshes)}")
-    manual = bpy.data.objects.new("Gravure_Manuelle", bpy.data.meshes.new("Gravure_Manuelle"))
-    p.coll_jewel.objects.link(manual)
-    manual.parent = p.pendant_pivot
-    nverts = len(txt.data.vertices)
-    p.text = "MIO"
-    check("Mettre à jour le pendentif", run("pendant_create", update_only=True) == {"FINISHED"})
-    check("Même objet, nouveau maillage", p.pendant_text == txt and len(txt.data.vertices) != nverts)
-    check("Objet manuel conservé", "Gravure_Manuelle" in bpy.data.objects)
-    check("Source du texte modifiable conservée", p.text_source and p.text_source.data.body == "MIO")
-    p.use_plate = False
-    run("pendant_create", update_only=True)
-    check("Plaque désactivée → plaque générée retirée", p.plate is None and count_role("plaque") == 0)
-    p.use_plate = True
-    run("pendant_create", update_only=True)
-    check("Plaque réactivée", p.plate is not None and count_role("plaque") == 1)
-    p.font_path = os.path.join(WORK, "police_absente.ttf")
-    check("Police manquante → erreur", run("pendant_create", update_only=True) != {"FINISHED"})
-    font = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-    if os.path.isfile(font):
-        p.font_path = font
-        check("Police chargée depuis un fichier", run("pendant_create", update_only=True) == {"FINISHED"}
-              and p.text_source.data.font.filepath.endswith("DejaVuSans-Bold.ttf"))
-    else:
-        p.font_path = ""
-    p.text = "   "
-    check("Texte vide → erreur", run("pendant_create", update_only=True) != {"FINISHED"})
-    p.text = "NO RULES"
-    run("pendant_create", update_only=True)
+    # 1. SVG -------------------------------------------------------------------------
+    print("\n[1] SVG")
+    svg_path = os.path.join(WORK, "pendentif.svg")
+    open(svg_path, "w").write(SVG)
+    before = set(bpy.data.objects)
+    bpy.ops.import_curve.svg(filepath=svg_path)
+    by_name = {o.name: o for o in bpy.data.objects if o not in before}
+    check("SVG importé en 4 courbes", len(by_name) == 4 and all(o.type == "CURVE" for o in by_name.values()), list(by_name))
+    fond, lettre, medaille, detail = (by_name[n] for n in ("fond", "lettre", "medaille", "detail"))
+    curves = [fond, lettre, medaille, detail]
+    black_mat = lettre.data.materials[0]
+    check("Matériau noir partagé détecté", svg.is_black(black_mat, p.black_threshold)
+          and black_mat == detail.data.materials[0] and not svg.is_black(fond.data.materials[0], p.black_threshold))
+    select_only(*curves)
+    res = run("svg_detect")
+    check("Même hauteur : pas d'ordre deviné", res == {"FINISHED"} and all(c.mio_svg_layer == 0 for c in curves))
+    check("Préparation refusée tant que les couches ne sont pas affectées", run("svg_prepare") != {"FINISHED"})
+    for obj, layer in ((fond, 1), (lettre, 2), (medaille, 2), (detail, 3)):
+        select_only(obj)
+        run("svg_assign", layer=layer)
+    select_only(*curves)
+    flat_faces = {c.name: len(bpy.data.meshes.new_from_object(c).polygons) for c in curves}
+    check("Préparer les SVG sélectionnés", run("svg_prepare") == {"FINISHED"})
+    res_objs = {o["mcs_svg_src"]: o for o in svg.results(p)}
+    check("4 maillages produits", len(res_objs) == 4 and all(o.type == "MESH" for o in res_objs.values()))
+    e = {k: heights_along(o) for k, o in res_objs.items()}
+    check("Couche 1 : 0,05 m, de 0 à 0,05", abs(e[fond.name][0]) < 1e-6 and abs(e[fond.name][1] - 0.05) < 1e-6, e[fond.name])
+    check("Couche 2 : 0,025 m, posée sur la couche 1", abs(e[lettre.name][0] - 0.05) < 1e-6
+          and abs(e[lettre.name][1] - 0.075) < 1e-6 and abs(e[medaille.name][0] - 0.05) < 1e-6, e[lettre.name])
+    check("Couche 3 : 0,015 m, posée sur la couche 2", abs(e[detail.name][0] - 0.075) < 1e-6
+          and abs(e[detail.name][1] - 0.09) < 1e-6, e[detail.name])
+    lm = res_objs[lettre.name]
+    check("Forme noire conservée (faces et trou)", lm.get("mcs_flat_faces") == flat_faces[lettre.name]
+          and len(lm.data.polygons) > 2 * flat_faces[lettre.name])
+    check("Matériau noir retiré de la lettre", all(m is None or not svg.is_black(m, p.black_threshold) for m in lm.data.materials))
+    check("Matériaux non noirs conservés", list(res_objs[fond.name].data.materials) == list(fond.data.materials)
+          and list(res_objs[medaille.name].data.materials) == list(medaille.data.materials))
+    check("Forme uniquement noire : plus aucun matériau, géométrie gardée", len(res_objs[detail.name].data.materials) == 0
+          and res_objs[detail.name].get("mcs_flat_faces") == flat_faces[detail.name])
+    check("Plan du dessin conservé (XY)", np.allclose(np.array(res_objs[fond.name].dimensions[:2]),
+                                                     np.array(fond.dimensions[:2]), atol=1e-6))
+    check("Courbes sources conservées et masquées", all(c.name in bpy.data.objects and c.hide_get() for c in curves)
+          and lettre.data.materials[0] == black_mat)
+    check("Vérification interne sans erreur", not [i for i in svg.verify(p) if i[0] == "ERROR"])
+    select_only(*res_objs.values())
+    run("svg_prepare")
+    select_only(*svg.results(p))
+    run("svg_prepare")
+    e2 = {o["mcs_svg_src"]: heights_along(o) for o in svg.results(p)}
+    check("Deux clics de plus : ni doublon ni épaisseur cumulée", len(svg.results(p)) == 4 and e2 == e, e2)
+    p.thickness_1 = 0.03
+    select_only(*svg.results(p))
+    run("svg_prepare")
+    e3 = {o["mcs_svg_src"]: heights_along(o) for o in svg.results(p)}
+    check("Épaisseur modifiée : couches recalculées", abs(e3[fond.name][1] - 0.03) < 1e-6 and abs(e3[lettre.name][0] - 0.03) < 1e-6)
+    p.thickness_1 = 0.05
+    p.stack_axis = "NEG_Z"
+    select_only(*svg.results(p))
+    run("svg_prepare")
+    e4 = {o["mcs_svg_src"]: heights_along(o) for o in svg.results(p)}
+    check("Direction −Z respectée", abs(e4[fond.name][0] + 0.05) < 1e-6 and abs(e4[fond.name][1]) < 1e-6, e4[fond.name])
+    p.stack_axis = "POS_Z"
+    select_only(*svg.results(p))
+    run("svg_prepare")
+    for c, z in ((fond, 0.0), (lettre, 0.01), (medaille, 0.01), (detail, 0.02)):
+        c.hide_set(False)
+        c.location.z = z
+        c.mio_svg_layer = 0
+    bpy.context.view_layer.update()
+    select_only(*curves)
+    run("svg_detect")
+    check("Hauteurs distinctes : ordre détecté", [c.mio_svg_layer for c in curves] == [1, 2, 2, 3],
+          [c.mio_svg_layer for c in curves])
+    for c in curves:
+        c.location.z = 0.0
+    select_only(*curves)
+    run("svg_prepare")
+    check("Pendentif désigné automatiquement", sum(1 for x in p.parts if x.role == "PENDANT") == 4)
 
-    # Chaîne -------------------------------------------------------------------
+    # 2. Chaîne -----------------------------------------------------------------------
     print("\n[2] Chaîne")
-    obj_path = os.path.join(WORK, "chaine_test.obj")
+    obj_path = os.path.join(WORK, "chaine.obj")
     make_chain_obj(obj_path)
-    p.chain_path = os.path.join(WORK, "absente.obj")
-    check("OBJ manquant → erreur", run("chain_import") != {"FINISHED"})
-    fake = os.path.join(WORK, "chaine.fbx")
-    open(fake, "w").close()
-    p.chain_path = fake
-    check("Format non convenu → erreur", run("chain_import") != {"FINISHED"})
     p.chain_path = obj_path
-    p.chain_forward, p.chain_up = "NEGATIVE_Z", "Y"  # axes de l'export OBJ de Blender
-    check("Importer la chaîne", run("chain_import") == {"FINISHED"} and p.chain is not None)
-    check("Chaîne rattachée à la racine", p.chain.parent == p.jewel_root)
+    check("Importer ma chaîne", run("chain_import") == {"FINISHED"})
+    chain = [x.obj for x in p.parts if x.role == "CHAIN"][0]
+    check("Matériau et UV importés conservés", chain.data.materials and chain.data.materials[0].name.startswith("Or_Chaine")
+          and len(chain.data.uv_layers) == 1)
+    uv_chain = np.array([d.uv[:] for d in chain.data.uv_layers[0].data])
     n_obj = len(bpy.data.objects)
     run("chain_import")
-    run("chain_import")
-    check("Ré-import : remplacement sans doublon", len(bpy.data.objects) == n_obj, f"{n_obj} → {len(bpy.data.objects)}")
-    run("pendant_snap")
-    from bl_ext.user_default.mio_chain_studio.assembly import world_bounds
-    lo, hi = world_bounds([p.bail])
-    low = min((p.chain.matrix_world @ v.co).z for v in p.chain.data.vertices)
-    check("Pendentif accroché au bas de la chaîne", abs((lo.z + hi.z) / 2 - low) < 1e-4)
-    root_before = [o.matrix_world.copy() for o in (p.chain, txt)]
-    rel_before = p.chain.matrix_world.inverted() @ txt.matrix_world
-    p.jewel_root.location.x += 0.5
-    bpy.context.view_layer.update()
-    rel_after = p.chain.matrix_world.inverted() @ txt.matrix_world
-    check("Déplacer l'ensemble conserve l'assemblage", all(abs(a - b) < 1e-6 for ra, rb in zip(rel_before, rel_after) for a, b in zip(ra, rb)))
-    p.jewel_root.location.x -= 0.5
-    bpy.context.view_layer.update()
+    check("Ré-import : remplacement sans doublon", len(bpy.data.objects) == n_obj
+          and sum(1 for x in p.parts if x.role == "CHAIN") == 1)
+    chain = [x.obj for x in p.parts if x.role == "CHAIN"][0]
+    p.chain_path = os.path.join(WORK, "absente.obj")
+    check("Import échoué : chaîne précédente conservée", run("chain_import") != {"FINISHED"}
+          and [x.obj for x in p.parts if x.role == "CHAIN"] == [chain])
+    bad = os.path.join(WORK, "vide.obj")
+    open(bad, "w").write("# rien\n")
+    p.chain_path = bad
+    check("OBJ sans maillage : chaîne précédente conservée", run("chain_import") != {"FINISHED"}
+          and chain.name in bpy.data.objects)
+    bpy.ops.mesh.primitive_torus_add(major_radius=0.02, minor_radius=0.003, location=(0.2, 0, 0.4))
+    extra = bpy.context.active_object
+    extra.name = "Chaine_Scene"
+    select_only(extra)
+    check("Chaîne de la scène ajoutée", run("part_add", role="CHAIN") == {"FINISHED"} and any(x.obj == extra for x in p.parts))
+    idx = [i for i, x in enumerate(p.parts) if x.obj == extra][0]
+    run("part_remove", index=idx)
+    check("Retirer un composant ne supprime pas l'objet", "Chaine_Scene" in bpy.data.objects and not any(x.obj == extra for x in p.parts))
 
-    # Référence utilisateur (facultatif) -----------------------------------------------------
-    if REF_YDD and os.path.isfile(REF_YDD):
-        before = set(bpy.data.objects)
-        bpy.ops.sollumz.import_assets(directory=os.path.dirname(REF_YDD) + os.sep, files=[{"name": os.path.basename(REF_YDD)}])
-        new = [o for o in bpy.data.objects if o not in before and o.type == "MESH"]
-        check("Référence teef importée par Sollumz", bool(new))
-        if new:
-            p.ref_model = new[0]
-
-    # 3. Matériaux --------------------------------------------------------------
-    print("\n[3] Matériaux et textures")
-    check("Configurer les matériaux", run("materials_setup") == {"FINISHED"})
-    from bl_ext.user_default.mio_chain_studio.materials import component_materials, unique_materials
-    mats = unique_materials(p)
-    check("Un matériau Sollumz ped_default par composant", len(mats) == 4 and all(szb.material_shader(m) == "ped_default.sps" for m, r in mats))
-    nmat = len(bpy.data.materials)
-    run("materials_setup")
-    check("Clics répétés : pas de matériaux en plus", len(bpy.data.materials) == nmat)
-    tex_dir = os.path.join(WORK, "src_tex")
+    # 3. Matériaux ---------------------------------------------------------------------
+    print("\n[3] Matériaux")
+    tex_dir = os.path.join(WORK, "tex")
     os.makedirs(tex_dir)
-    colors = {"chaine": (0.8, 0.6, 0.1, 1), "texte": (0.9, 0.9, 0.9, 1), "plaque": (0.1, 0.1, 0.1, 1), "beliere": (0.8, 0.6, 0.1, 1)}
-    for mat, role in mats:
-        path = os.path.join(tex_dir, f"tex_{role}.png")
-        make_png(path, colors[role], 128 if role == "plaque" else 256)
-        run("texture_assign", material=mat.name, sampler="DiffuseSampler", filepath=path)
-    check("Textures associées", all(m.node_tree.nodes["DiffuseSampler"].image and m.node_tree.nodes["DiffuseSampler"].image.filepath for m, r in mats))
-    run("texture_assign", material=mats[0][0].name, sampler="DiffuseSampler", filepath=os.path.join(tex_dir, "absente.png"))
-    check("Texture introuvable refusée", mats[0][0].node_tree.nodes["DiffuseSampler"].image.filepath.endswith(".png"))
-    st, issues = status.step3(bpy.context, p)
-    check("Statut 3 non terminé sans DDS/YTD", st != "Terminé")
-    m0 = mats[0][0]
-    p.preset_name = "test_preset"
-    node = m0.node_tree.nodes["specularIntensityMult"]
-    node.outputs[0].default_value = 0.42
-    run("preset_save", material=m0.name)
-    node.outputs[0].default_value = 0.1
-    run("preset_load", material=m0.name, preset="test_preset")
-    check("Préréglage enregistré puis réappliqué", abs(m0.node_tree.nodes["specularIntensityMult"].outputs[0].default_value - 0.42) < 1e-6)
-    mat_text = p.pendant_text.data.materials[0]
-    p.text = "NO RULES!"
-    run("pendant_create", update_only=True)
-    check("Mise à jour du texte : matériau conservé", p.pendant_text.data.materials[0] == mat_text)
-    p.text = "NO RULES"
-    run("pendant_create", update_only=True)
-    run("materials_setup")
+    diff = os.path.join(tex_dir, "argent_diff.png")
+    make_png(diff, (0.8, 0.8, 0.85, 1))
+    foreign = bpy.data.materials.new("Materiau_Utilisateur")
+    fnode = foreign.node_tree.nodes.new("ShaderNodeTexImage")
+    fnode.image = bpy.data.images.load(teef.path_of("bump"), check_existing=True)
+    fnode.image.colorspace_settings.name = "sRGB"
+    shared_before = fnode.image.colorspace_settings.name
+    fond_mesh = [o for o in svg.results(p) if o["mcs_svg_src"] == fond.name][0]
+    n_sel = edit_select_faces(fond_mesh, lambda f: f.normal.z > 0.9)
+    p.mat_kind, p.mat_mode, p.diffuse_path = "PED", "CUSTOM", diff
+    me = fond_mesh.data
+    bpy.ops.object.mode_set(mode="OBJECT")
+    mi_before = np.array([q.material_index for q in me.polygons])
+    sel = np.array([q.select for q in me.polygons])
+    uv_before = np.array([d.uv[:] for d in me.uv_layers[0].data]) if me.uv_layers else None
+    bpy.ops.object.mode_set(mode="EDIT")
+    check("Appliquer aux faces sélectionnées (Ped)", run("apply_faces") == {"FINISHED"})
+    bpy.ops.object.mode_set(mode="OBJECT")
+    mat = me.materials[me.polygons[int(np.nonzero(sel)[0][0])].material_index]
+    mi_after = np.array([q.material_index for q in me.polygons])
+    check("Shader ped.sps", szb.material_shader(mat) == "ped.sps", szb.material_shader(mat))
+    check("Matériau sur les seules faces sélectionnées", (mi_after[~sel] == mi_before[~sel]).all()
+          and all(me.materials[i] == mat for i in mi_after[sel]), n_sel)
+    nodes = mat.node_tree.nodes
+    check("Textures : Diffuse, Bump Teef, Spec Teef", nodes["DiffuseSampler"].image.filepath.endswith("argent_diff.png")
+          and szb.texture_name_of_image(nodes["BumpSampler"].image) == "teef_normal_001"
+          and szb.texture_name_of_image(nodes["SpecSampler"].image) == "teef_spec_000")
+    check("Embedded : Bump et Spec oui, Diffuse non", nodes["BumpSampler"].texture_properties.embedded
+          and nodes["SpecSampler"].texture_properties.embedded and not nodes["DiffuseSampler"].texture_properties.embedded)
+    check("BumpSampler en Non-Color", nodes["BumpSampler"].image.colorspace_settings.name == "Non-Color")
+    check("Image partagée non modifiée (autre matériau)", fnode.image.colorspace_settings.name == shared_before
+          and fnode.image != nodes["BumpSampler"].image)
+    uv0 = np.array([d.uv[:] for d in me.uv_layers["UVMap 0"].data])
+    loops_sel = materials.selected_loops(me, sel)
+    check("Cube Projection : UV des autres faces intactes", uv_before is None or np.allclose(uv0[~loops_sel], uv_before[~loops_sel]))
+    check("Cube Projection : UV des faces choisies recalculées", uv_before is None or not np.allclose(uv0[loops_sel], uv_before[loops_sel]))
+    n_mats = len(bpy.data.materials)
+    edit_select_faces(fond_mesh, lambda f: f.normal.z < -0.9)
+    run("apply_faces")
+    check("Mêmes réglages : matériau réutilisé", len(bpy.data.materials) == n_mats)
+    p.mat_kind = "EMISSIVE"
+    med = [o for o in svg.results(p) if o["mcs_svg_src"] == medaille.name][0]
+    edit_select_faces(med, lambda f: True)
+    check("Appliquer (Ped Emissive)", run("apply_faces") == {"FINISHED"})
+    bpy.ops.object.mode_set(mode="OBJECT")
+    emat = med.data.materials[med.data.polygons[0].material_index]
+    check("Shader ped_emissive.sps + emissiveMultiplier + UVMap 1", szb.material_shader(emat) == "ped_emissive.sps"
+          and szb.param_node(emat, "emissiveMultiplier") is not None and "UVMap 1" in med.data.uv_layers)
+    p.mat_kind = "PED"
+    for o, r in [(o, r) for o, r in __import__("bl_ext.user_default.mio_chain_studio.utils", fromlist=["x"]).part_meshes(p)]:
+        if o == med:
+            continue
+        edit_select_faces(o, lambda f: True)
+        run("apply_faces")
+    bpy.ops.object.mode_set(mode="OBJECT")
+    check("Statut 3 terminé (toutes les faces couvertes)", status.step3(bpy.context, p)[0] == "Terminé",
+          status.step3(bpy.context, p)[1])
+    p.diffuse_path = os.path.join(tex_dir, "absente.png")
+    edit_select_faces(fond_mesh, lambda f: True)
+    check("Texture manquante : refus explicite", run("apply_faces") != {"FINISHED"})
+    bpy.ops.object.mode_set(mode="OBJECT")
+    p.diffuse_path = diff
 
-    # Atlas / DDS / YTD ----------------------------------------------------------------
-    print("\n[3] Atlas, DDS, YTD")
-    p.use_atlas = True
-    p.atlas_size = "512"
-    uv_before = np.array([d.uv[:] for d in p.chain.data.uv_layers["UVMap 0"].data])
-    check("Préparer l'atlas", run("atlas_build") == {"FINISHED"})
-    check("Atlas 512 enregistré", p.atlas_image and tuple(p.atlas_image.size) == (512, 512) and os.path.isfile(bpy.path.abspath(p.atlas_image.filepath)))
-    check("Nom de l'atlas = nom de texture", szb.texture_name_of_image(p.atlas_image) == p.texture_name())
-    uv_after = np.array([d.uv[:] for d in p.chain.data.uv_layers["UVMap 0"].data])
-    check("UV d'origine intactes", np.allclose(uv_before, uv_after))
-    check("Vérification de l'atlas sans erreur", not [i for i in atlas.verify(p) if i[0] == "ERROR"])
-    check("Atlas à jour", atlas.atlas_state(p)[1])
-    p.text = "NO RULES 2"
-    run("pendant_create", update_only=True)
-    check("Texte modifié → atlas périmé", not atlas.atlas_state(p)[1])
-    run("atlas_build")
-    check("Atlas reconstruit à jour", atlas.atlas_state(p)[1])
-    fake_dds = os.path.join(WORK, "faux.dds")
-    shutil.copy(bpy.path.abspath(p.atlas_image.filepath), fake_dds)
-    info_f, iss = dds.verify(fake_dds)
-    check("PNG renommé en .dds refusé", info_f is None and iss)
-    enc = dds.find_encoders()
-    if enc:
-        check(f"Conversion DDS ({enc[0][0]})", run("dds_convert") == {"FINISHED"})
-        hdr = dds.read_header(bpy.path.abspath(p.dds_path))
-        check("En-tête DDS vérifié (DXT5 512×512, mipmaps)", hdr["format"] == "DXT5" and hdr["width"] == 512 and hdr["mips"] > 1, str(hdr))
-        check("Préparer le YTD", run("ytd_prepare") == {"FINISHED"})
-        txd = szb.find_txd(bpy.data.scenes["Scene"], p.ytd_name())
-        check("YTD contient la texture", txd and [t.name for t in txd.textures] == [p.texture_name()])
-    else:
-        check("Sans encodeur : conversion refusée proprement", run("dds_convert") != {"FINISHED"})
+    # 4. Presets ----------------------------------------------------------------------
+    print("\n[4] Value Parameters et presets")
+    select_only(fond_mesh)
+    fond_mesh.active_material_index = list(fond_mesh.data.materials).index(mat)
+    params = dict(materials.value_parameters(mat))
+    check("Value Parameters du shader affichés", "specularIntensityMult" in params and "emissiveMultiplier" not in params)
+    check("emissiveMultiplier pour le shader émissif", "emissiveMultiplier" in dict(materials.value_parameters(emat)))
+    params["specularIntensityMult"].outputs[0].default_value = 0.42
+    p.new_preset_name = "argent"
+    check("Enregistrer comme preset", run("preset_save") == {"FINISHED"} and "argent" in presets.names())
+    data = presets.load("argent")
+    check("Preset : shader, textures, Embedded, espaces, paramètres", data["shader"] == "ped.sps"
+          and data["textures"]["BumpSampler"]["embedded"] and data["textures"]["BumpSampler"]["colorspace"] == "Non-Color"
+          and abs(data["params"]["specularIntensityMult"][0] - 0.42) < 1e-6 and presets.status(data)[0])
+    p.preset_name = "argent"
+    p.new_preset_name = "or"
+    check("Dupliquer un preset", run("preset_duplicate") == {"FINISHED"} and "or" in presets.names())
+    p.preset_name = "or"
+    d2 = presets.load("or")
+    d2["textures"]["DiffuseSampler"]["path"] = os.path.join(tex_dir, "deplacee.png")
+    presets.save("or", d2)
+    check("Preset incomplet signalé", not presets.status(presets.load("or"))[0])
+    check("Preset incomplet non appliqué", run("preset_apply") != {"FINISHED"})
+    presets.relocate("or", "DiffuseSampler", diff)
+    check("Relocaliser rend le preset complet", presets.status(presets.load("or"))[0])
+    params["specularIntensityMult"].outputs[0].default_value = 0.1
+    p.preset_name = "argent"
+    check("Appliquer un preset", run("preset_apply") == {"FINISHED"}
+          and abs(params["specularIntensityMult"].outputs[0].default_value - 0.42) < 1e-6)
+    p.mat_mode, p.preset_name = "PRESET", "argent"
+    edit_select_faces(fond_mesh, lambda f: True)
+    check("Mode Preset appliqué aux faces", run("apply_faces") == {"FINISHED"})
+    bpy.ops.object.mode_set(mode="OBJECT")
+    p.mat_mode = "CUSTOM"
+    p.preset_name = "or"
+    check("Supprimer un preset", run("preset_delete") == {"FINISHED"} and "or" not in presets.names())
+    check("Presets dans un dossier persistant", os.path.isfile(os.path.join(WORK, "presets", "argent.json")))
 
-    # 4. Effets ------------------------------------------------------------------
-    print("\n[4] Effets")
-    check("Appliquer les couleurs de sommets", run("vertex_colors_apply") == {"FINISHED"})
-    check("Couleurs vérifiées", not effects.colors_issues(p))
-    got = effects.read_colors(p.chain.data, 0)
-    check("Color 1 = 255 128 0 255", got is not None and (got == [255, 128, 0, 255]).all())
-    check("Émissif activé sur le texte", run("emissive_set", role="texte", enable=True) == {"FINISHED"}
-          and szb.material_shader(p.pendant_text.data.materials[0]) == "ped_emissive.sps"
-          and effects.emissive_value(p.pendant_text.data.materials[0]) == p.emissive_multiplier)
-    check("Émissif : UVMap 1 ajoutée", "UVMap 1" in p.pendant_text.data.uv_layers)
-    check("Émissif désactivé", run("emissive_set", role="texte", enable=False) == {"FINISHED"}
-          and szb.material_shader(p.pendant_text.data.materials[0]) == "ped_default.sps")
-    if p.ref_model is not None:
-        check("Couleurs lues depuis la référence", run("vertex_colors_from_ref") == {"FINISHED"}
-              and tuple(round(c * 255) for c in p.vcol0) == (255, 128, 0, 255))
+    # 5. Color Attributes ------------------------------------------------------------------
+    print("\n[5] Color Attributes")
+    chain.data.color_attributes.new("Color 1", "FLOAT_COLOR", "POINT")
+    chain.data.attributes.new("mon_attribut", "FLOAT", "POINT")
+    p.color_targets = "PARTS"
+    check("Configurer les Color Attributes", run("colors_configure") == {"FINISHED"})
+    from bl_ext.user_default.mio_chain_studio.utils import part_meshes
+    objs = [o for o, r in part_meshes(p)]
+    ok5 = True
+    for o in objs:
+        c1, c2 = o.data.color_attributes.get("Color 1"), o.data.color_attributes.get("Color 2")
+        ok5 &= bool(c1 and c2 and c1.domain == c2.domain == "CORNER" and c1.data_type == c2.data_type == "BYTE_COLOR")
+        ok5 &= bool((colors.read_bytes(c1) == [255, 128, 0, 255]).all() and (colors.read_bytes(c2) == [0, 0, 0, 0]).all())
+    check("Color 1 #FF8000 α1 et Color 2 #000000 α0, Face Corner / Byte Color", ok5)
+    c1 = chain.data.color_attributes["Color 1"]
+    check("Conversion : valeur linéaire de 0x80 ≈ 0,2158", abs(c1.data[0].color[1] - 0.2158605) < 1e-3, c1.data[0].color[:])
+    check("Mauvais type remplacé, autres attributs conservés", "mon_attribut" in chain.data.attributes
+          and len([a for a in chain.data.color_attributes if a.name.startswith("Color 1")]) == 1)
+    n_attr = sum(len(o.data.attributes) for o in objs)
+    run("colors_configure")
+    check("Clic répété : pas de doublon d'attribut", sum(len(o.data.attributes) for o in objs) == n_attr)
+    c1.data[0].color_srgb = (1.0, 0xBA / 255, 1.0, 1.0)
+    check("Peinture existante : refus sans confirmation", run("colors_configure") != {"FINISHED"}
+          and colors.read_bytes(c1)[0].tolist() == [255, 186, 255, 255])
 
-    # 5. Rigging -----------------------------------------------------------------------
-    print("\n[5] Rigging")
-    arm, body = make_armature()
-    p.ref_armature = arm
-    p.ref_weights_mesh = body
-    check("Lier à l'armature", run("rig_link") == {"FINISHED"})
-    check("Générer les poids (chaîne, transfert)", run("rig_weights", group="CHAIN") == {"FINISHED"})
-    check("Générer les poids (pendentif, rigide)", run("rig_weights", group="PENDANT") == {"FINISHED"})
-    iss = rigging.analyse(p)
-    check("Rigging sans erreur bloquante", not [i for i in iss if i[0] == "ERROR"], str([i[1] for i in iss if i[0] == "ERROR"]))
-    w = rigging.read_weights(p.chain)
-    check("Chaîne : tous les sommets pondérés, 4 influences max",
-          len(w) == len(p.chain.data.vertices) and max(len(d) for d in w.values()) <= 4)
-    wt = rigging.read_weights(p.pendant_text)
-    check("Pendentif rigide : poids identiques partout", len({tuple(sorted(d.items())) for d in wt.values()}) == 1)
-    g = p.chain.vertex_groups.new(name="OS_INEXISTANT")
-    g.add([0], 0.5, "REPLACE")
-    check("Groupe sans os détecté", any("sans os" in i[1] for i in rigging.analyse(p)))
-    p.chain.vertex_groups.remove(g)
-    check("Restaurer les poids précédents", run("rig_restore", group="PENDANT") == {"FINISHED"} and not p.pendant_text.vertex_groups)
-    run("rig_weights", group="PENDANT")
-    dg = bpy.context.evaluated_depsgraph_get()
-    rest = [v.co.copy() for v in p.chain.evaluated_get(dg).to_mesh().vertices]
-    used = rigging.weight_bones(p)
-    check("La chaîne utilise plusieurs os", len(used) >= 2, str(used))
-    p.deform_bone = used[0]
-    check("Tester la déformation", run("pose_test") == {"FINISHED"})
-    dg = bpy.context.evaluated_depsgraph_get()
-    posed = [v.co.copy() for v in p.chain.evaluated_get(dg).to_mesh().vertices]
-    check("Déformation visible", max((a - b).length for a, b in zip(rest, posed)) > 1e-3)
-    run("pose_reset")
-    dg = bpy.context.evaluated_depsgraph_get()
-    back = [v.co.copy() for v in p.chain.evaluated_get(dg).to_mesh().vertices]
-    check("Pose restaurée exactement", max((a - b).length for a, b in zip(rest, back)) < 1e-6)
-    run("rig_check")
-    run("deform_confirm")
-    p.text = "NO RULES"
-    run("pendant_create", update_only=True)
-    check("Mise à jour du texte : poids réappliqués", len(p.pendant_text.vertex_groups) > 0
-          and not [i for i in rigging.analyse(p) if i[0] == "ERROR"])
-    run("atlas_build")
-    if enc:
-        run("dds_convert")
-        run("ytd_prepare")
-    run("vertex_colors_apply")
-    run("rig_check")
-    run("deform_confirm")
+    # 6. Glow -----------------------------------------------------------------------------
+    print("\n[6] Glow")
+    select_only(chain)
+    check("Activer Color 1 et passer en Vertex Paint", run("glow_paint_mode") == {"FINISHED"}
+          and bpy.context.mode == "PAINT_VERTEX" and chain.data.color_attributes.active_color.name == "Color 1")
+    bpy.ops.object.mode_set(mode="OBJECT")
+    painted = int((colors.read_bytes(c1) == [255, 186, 255, 255]).all(axis=1).sum())
+    check("Note glow affichée en mode émissif", status.uses_glow(p) and "#FFBAFF" in colors.GLOW_NOTE)
 
-    # 6. Copie d'export / vérification --------------------------------------------------
-    print("\n[6] Vérification")
-    src_sig = [(o.name, len(o.data.vertices), o.data.materials[0].name) for o, r in exp.component_objects(p)]
-    check("Créer la copie d'export", run("export_copy") == {"FINISHED"} and p.export_root is not None)
-    root = p.export_root
-    check("Hiérarchie Sollumz (DWD > drawable > modèles)", root.sollum_type == szb.DWD and root.type == "ARMATURE"
-          and [c.sollum_type for c in root.children] == [szb.DRAWABLE] and len(exp._models(root)) == 4)
-    check("Sources intactes", src_sig == [(o.name, len(o.data.vertices), o.data.materials[0].name) for o, r in exp.component_objects(p)])
-    n_exp = len(exp.export_objects(p))
-    run("export_copy")
-    check("Copie d'export recréée sans doublon", len(exp.export_objects(p)) == n_exp)
-    run("check")
+    # 7. Rigging --------------------------------------------------------------------------
+    print("\n[7] Rigging")
+    g = chain.vertex_groups.new(name="SKEL_Neck_1")
+    g.add([0, 1, 2], 0.7, "REPLACE")
+    src_sig = [(o.name, len(o.data.vertices), len(o.vertex_groups)) for o in objs]
+    check("Rigger sur SKEL_Spine3", run("rig_spine3") == {"FINISHED"})
+    final = p.final_obj
+    weights_ok = all(len(v.groups) == 1 and v.groups[0].weight == 1.0 for v in final.data.vertices)
+    check("Un seul mesh final, groupe SKEL_Spine3 uniquement", final and [x.name for x in final.vertex_groups] == ["SKEL_Spine3"])
+    check("Poids 1 sur SKEL_Spine3 pour tous les sommets", weights_ok and len(final.data.vertices) == sum(len(o.data.vertices) for o in objs))
+    mod = [m for m in final.modifiers if m.type == "ARMATURE"]
+    check("Liaison au squelette masculin", len(mod) == 1 and mod[0].object == p.ref_root)
+    check("Sources intactes (poids résiduels seulement sur la source)", src_sig == [(o.name, len(o.data.vertices), len(o.vertex_groups)) for o in objs])
+    from bl_ext.user_default.mio_chain_studio.utils import world_bounds
+    b1, b2 = world_bounds(objs), world_bounds([final])
+    check("Placement visuel conservé", np.allclose(b1[0], b2[0], atol=1e-6) and np.allclose(b1[1], b2[1], atol=1e-6))
+    fc1 = final.data.color_attributes.get("Color 1")
+    check("Peinture du glow conservée (étape 5 non relancée)", fc1 is not None and
+          int((colors.read_bytes(fc1) == [255, 186, 255, 255]).all(axis=1).sum()) == painted)
+    check("Matériaux et UV conservés", {m.name for o in objs for m in o.data.materials if m} <= {m.name for m in final.data.materials if m}
+          and "UVMap 0" in final.data.uv_layers)
+    n_final = sum(1 for o in bpy.data.objects if o.get("mcs_final"))
+    run("rig_spine3")
+    check("Clic répété : toujours un seul mesh final", sum(1 for o in bpy.data.objects if o.get("mcs_final")) == n_final == 1
+          and p.final_obj.name == "MCS_Bijou_Final")
+    final = p.final_obj
+    check("Weight Paint", run("weight_paint") == {"FINISHED"} and bpy.context.mode == "PAINT_WEIGHT")
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+    # 8. Export ----------------------------------------------------------------------------
+    print("\n[8] Modèle d'export")
+    final_world = final.matrix_world.copy()
+    check("Préparer le modèle d'export", run("export_prepare") == {"FINISHED"})
+    er, ed = p.export_root, p.export_drawable
+    target = p.export_target
+    check("Copie d'export : armature > drawable > mesh de référence", er.type == "ARMATURE" and er.name == "teef_000_u"
+          and ed.parent == er and exp.strip_suffix(ed.name) == "teef_000_u" and target.parent == ed and target.type == "MESH",
+          (er.name, ed.name, target.name))
+    target_name = target.name
+    check("Armature d'export : mêmes os (128, SKEL_ROOT, SKEL_Spine3)", er.data == p.ref_root.data and len(er.data.bones) == 128)
+    p.export_target = None
+    p.export_target = target
+    check("Mesh cible identifié dans la nouvelle hiérarchie (pas par nom)", p.export_target == target and target != p.ref_model)
+    ref_lods = {k: m.name for k, m in szb.lod_meshes(p.ref_model).items() if m}
+    check("Remplacer le mesh de référence par mon bijou", run("export_replace") == {"FINISHED"})
+    check("Mesh final sous le drawable d'export", final.parent == ed and final.sollum_type == szb.MODEL)
+    check("Position monde conservée (pas de double transformation)",
+          max(abs(a - b) for ra, rb in zip(final.matrix_world, final_world) for a, b in zip(ra, rb)) < 1e-6)
+    lods = szb.lod_meshes(final)
+    check("LOD : High = bijou, Medium et Low vides", lods["sollumz_high"] == final.data and lods["sollumz_medium"] is None
+          and lods["sollumz_low"] is None)
+    check("Mesh de référence retiré de la copie seulement", target_name not in bpy.data.objects
+          and p.ref_model.name == "SKEL_ROOT")
+    _, models = teef.find_structure(er)
+    check("Un seul mesh sous le drawable", models == [final])
+    check("Références intactes (SKEL_ROOT os et mesh, LOD)", p.ref_model.name == "SKEL_ROOT" and "SKEL_ROOT" in er.data.bones
+          and {k: m.name for k, m in szb.lod_meshes(p.ref_model).items() if m} == ref_lods)
+    mods = [m for m in final.modifiers if m.type == "ARMATURE"]
+    check("Liaison à l'armature d'export", len(mods) == 1 and mods[0].object == er)
+    check("Remplacement répété refusé proprement", run("export_replace") != {"FINISHED"} and final.parent == ed)
+    run("export_check")
     errors = [i.message for i in p.report if i.severity == "ERROR"]
-    check("Vérification : aucune erreur bloquante", not errors, " | ".join(errors))
+    check("Vérification avant export : aucune erreur bloquante", not errors, errors)
+    p.export_dir = os.path.join(WORK, "export")
+    check("Exporter avec Sollumz", run("export") == {"FINISHED"} and p.last_export_ok, json.loads(p.last_export or "{}").get("errors"))
+    xml_path = os.path.join(p.export_dir, "teef_000_u.ydd.xml")
+    xml = open(xml_path, encoding="utf-8").read() if os.path.isfile(xml_path) else ""
+    check("YDD : drawable teef_000_u (pas teef_012_u)", "<Name>teef_000_u</Name>" in xml and "teef_012_u" not in xml)
+    check("YDD : LOD High seulement", "DrawableModelsHigh" in xml and "DrawableModelsMedium" not in xml and "DrawableModelsLow" not in xml)
+    check("YDD : 100 % des sommets sur l'os 38", any("100 % sur l'os 38" in line or "à 100 %" in line
+                                                     for line in json.loads(p.last_export)["lines"]))
+    check("YDD : Bump et Spec DDS intégrés", os.path.isfile(os.path.join(p.export_dir, "teef_000_u", "teef_normal_001.dds"))
+          and os.path.isfile(os.path.join(p.export_dir, "teef_000_u", "teef_spec_000.dds")))
+    check("YDD : ancienne chaîne absente", xml.count("<VertexBuffer>") >= 1 and "teef_diff_012_a_uni" not in xml)
+    check("YDD : Colour0 255 128 0 255 et glow 255 186 255 255", "255 128 0 255" in xml and "255 186 255 255" in xml)
+    check("Statut 8 terminé", status.step8(bpy.context, p)[0] == "Terminé", status.step8(bpy.context, p)[1])
+    p.lod_mode = "DUPLICATE"
+    run("export_prepare")
+    check("Nouvelle préparation : bijou ressorti, pas supprimé", final.name in bpy.data.objects and final.parent is None)
+    run("export_replace")
+    run("export")
+    xml = open(xml_path, encoding="utf-8").read()
+    check("LOD High copié en Medium et Low (affiché comme non optimisé)", "DrawableModelsMedium" in xml and "DrawableModelsLow" in xml
+          and "non optimisée" in " ".join(i.message for i in p.report))
+    p.lod_mode = "HIGH_ONLY"
+    run("export_prepare")
+    run("export_replace")
+    run("export")
 
-    # Display ---------------------------------------------------------------------
-    print("\n[A] Aperçu sur display")
-    p.display_path = os.path.join(WORK, "inexistant.blend")
-    check("Display manquant → erreur", run("display_load") != {"FINISHED"})
+    # Display -----------------------------------------------------------------------------
+    print("\n[A] Display")
+    display_path = os.path.join(WORK, "display.blend")
+    make_display(display_path)
+    p.display_path = os.path.join(WORK, "absent.blend")
+    check("Display manquant : erreur", run("display_load") != {"FINISHED"})
     p.display_path = display_path
-    check("Analyser le display", run("display_analyse") == {"FINISHED"} and any(i.kind == "SCENE" for i in p.display_items))
+    run("display_analyse")
     check("Charger le display", run("display_load") == {"FINISHED"} and p.preview_scene is not None)
     ps = p.preview_scene
-    check("Caméra et réglages du display repris", p.render_camera and p.render_camera.name.startswith("CamPresentation")
-          and ps.cycles.samples == 128 and p.render_res_x == 800)
-    check("Ressource manquante signalée", "velours" in p.display_missing)
-    check("Second chargement refusé sans « Recharger »", run("display_load") != {"FINISHED"})
+    check("Caméra et réglages du display repris", p.render_camera and ps.cycles.samples == 128)
     mk = [o for o in ps.objects if o.name.startswith("Repere_Cou")][0]
     with bpy.context.temp_override(scene=ps, view_layer=ps.view_layers[0], active_object=mk):
-        check("Définir le repère (objet actif)", run("marker_set", source="ACTIVE") == {"FINISHED"})
-    check("Repère au cou du display", (p.preview_marker.matrix_world.translation - mk.matrix_world.translation).length < 1e-6)
-    check("Enregistrer le repère", run("marker_save") == {"FINISHED"})
-    check("Placer le bijou sur le display", run("preview_refresh") == {"FINISHED"})
-    copies = display.preview_objects(p, "copy")
-    check("Une copie par composant", len(copies) == 4)
-    n_meshes = len(bpy.data.meshes)
-    for _ in range(3):
-        run("preview_refresh")
-    check("Actualiser ×3 : pas de doublons", len(display.preview_objects(p, "copy")) == 4 and len(bpy.data.meshes) == n_meshes,
-          f"{n_meshes} → {len(bpy.data.meshes)}")
-    copy_chain = [c for c in display.preview_objects(p, "copy") if c.get("mcs_src_role") == "chaine"][0]
-    pm = copy_chain.data.materials[0]
-    pm.diffuse_color = (1, 0, 0, 1)
+        check("Repère réglable (objet actif)", run("marker_set", source="ACTIVE") == {"FINISHED"})
+    check("Placer le bijou", run("preview_refresh") == {"FINISHED"})
+    n = len(display.preview_objects(p, "copy"))
+    n_mesh = len(bpy.data.meshes)
     run("preview_refresh")
-    copy_chain = [c for c in display.preview_objects(p, "copy") if c.get("mcs_src_role") == "chaine"][0]
-    check("Matériau d'aperçu conservé, source intacte", copy_chain.data.materials[0].diffuse_color[0] == 1
-          and p.chain.data.materials[0].diffuse_color[:] != (1, 0, 0, 1))
-    copy_chain.data.vertices[0].co.x += 1
-    check("Géométrie d'aperçu indépendante", p.chain.data.vertices[0].co.x != copy_chain.data.vertices[0].co.x)
-    rel_src = p.chain.matrix_world.inverted() @ p.pendant_text.matrix_world
-    copy_text = [c for c in display.preview_objects(p, "copy") if c.get("mcs_src_role") == "texte"][0]
-    rel_cp = copy_chain.matrix_world.inverted() @ copy_text.matrix_world
-    check("Assemblage conservé sur le display", all(abs(a - b) < 1e-5 for ra, rb in zip(rel_src, rel_cp) for a, b in zip(ra, rb)))
-    p.preview_loc = (0.01, 0, 0)
-    check("Réglage de position appliqué", abs(p.preview_root.matrix_basis.translation.x - 0.01) < 1e-6)
-    p.wrap_target = [o for o in ps.objects if o.name.startswith("Buste")][0]
-    check("Épouser la forme (aperçu seulement)", run("wrap") == {"FINISHED"} and "MCS_Epouser" in copy_chain.modifiers
-          and "MCS_Epouser" not in p.chain.modifiers)
-    run("wrap", remove=True)
-    p.render_res_x, p.render_res_y, p.render_percent, p.quick_samples = 64, 48, 100, 1
+    run("preview_refresh")
+    check("Actualiser : pas de doublon", len(display.preview_objects(p, "copy")) == n and len(bpy.data.meshes) == n_mesh)
+    copy = display.preview_objects(p, "copy")[0]
+    src = bpy.data.objects[copy["mcs_preview_src"]]
+    check("Copie indépendante (maillage et matériaux)", copy.data != src.data
+          and not set(copy.data.materials) & set(src.data.materials))
+    p.render_res_x, p.render_res_y, p.quick_samples = 64, 48, 1
     p.render_dir = os.path.join(WORK, "rendus")
-    check("Lancer le rendu (rapide)", run("render") == {"FINISHED"} and any(f.endswith(".png") for f in os.listdir(p.render_dir)))
-    check("Réglages du display restaurés après rendu", ps.cycles.samples == 128 and ps.render.resolution_x == 800)
-    check("Voir par la caméra refusé proprement sans fenêtre", run("view_camera") != {"FINISHED"} or bpy.context.window is not None)
-    n_scenes = len(bpy.data.scenes)
-    check("Recharger le display", run("display_load", force=True) == {"FINISHED"})
-    check("Recharger : pas de scène en double", len(bpy.data.scenes) == n_scenes)
-    check("Repère enregistré restauré au rechargement", p.preview_marker is not None
-          and (p.preview_marker.matrix_world.translation - Vector((0, -0.25, 1.35))).length < 1e-5)
-    run("preview_refresh")
-
-    # 7. Export --------------------------------------------------------------------------
-    print("\n[7] Export")
-    run("export_copy")
-    run("check")
+    check("Lancer un rendu", run("render") == {"FINISHED"} and any(f.endswith(".png") for f in os.listdir(p.render_dir)))
+    check("Réglages du display restaurés", ps.cycles.samples == 128)
+    run("export_check")
     excl = [i.message for i in p.report if i.category == "Exclusion" and i.severity == "ERROR"]
-    check("Display exclu de l'export", not excl, str(excl))
-    p.export_dir = os.path.join(WORK, "export")
-    res = run("export")
-    data = json.loads(p.last_export_files or "{}")
-    check("Exporter avec Sollumz", res == {"FINISHED"} and p.last_export_ok, str(data.get("errors")))
-    ydd_xml = os.path.join(p.export_dir, f"{p.ydd_name()}.ydd.xml")
-    check("YDD XML produit", os.path.isfile(ydd_xml))
-    if os.path.isfile(ydd_xml):
-        content = open(ydd_xml, encoding="utf-8").read()
-        check("YDD : drawable et texture référencés", p.drawable_name() in content and p.texture_name() in content)
-        check("YDD : aucun élément du display", "Buste" not in content and "CamPresentation" not in content)
-        check("YDD : couleurs 255 128 0 255", "255 128 0 255" in content)
-    if enc:
-        ytd_xml = os.path.join(p.export_dir, f"{p.ytd_name()}.ytd.xml")
-        check("YTD XML + DDS produits", os.path.isfile(ytd_xml)
-              and os.path.isfile(os.path.join(p.export_dir, p.ytd_name(), f"{p.texture_name()}.dds")))
-    check("Statut 7 terminé", status.step7(bpy.context, p)[0] == "Terminé")
-    ps = p.preview_scene
-    with bpy.context.temp_override(scene=ps, view_layer=ps.view_layers[0]):
-        check("Export lancé depuis la scène d'aperçu", run("export") == {"FINISHED"} and p.last_export_ok
-              and "Buste" not in open(ydd_xml, encoding="utf-8").read())
-    warns = json.loads(p.last_export_files).get("warnings", [])
-    check("Écart XML/DDS de szio signalé", any("DXT5" in w for w in warns) if enc else True, str(warns))
-    check("Statut 8 à faire (manuel)", status.step8(bpy.context, p)[0] == "À faire")
-    for c in p.cw_checks:
-        c.done = True
-    check("Statut 8 terminé après la checklist", status.step8(bpy.context, p)[0] == "Terminé")
+    check("Display exclu de l'export", not excl, excl)
     run("export")
-    check("Nouvel export → checklist à revérifier", status.step8(bpy.context, p)[0] != "Terminé")
+    xml = open(xml_path, encoding="utf-8").read()
+    check("YDD sans objet du display", "Buste" not in xml and "CamPresentation" not in xml)
 
     errs = draw_all_panels()
-    check("Dessin de tous les panneaux sans erreur", not errs, " | ".join(errs))
+    check("Dessin de tous les panneaux", not errs, errs)
 
-    # Sauvegarde / réouverture --------------------------------------------------------------
+    # Sauvegarde et réouverture -----------------------------------------------------------
     print("\n[S] Sauvegarde et réouverture")
-    names = {k: getattr(p, k).name for k in ("pendant_text", "plate", "bail", "chain", "ref_armature", "preview_scene",
-                                             "export_root", "atlas_image", "preview_marker")}
+    names = {k: getattr(p, k).name for k in ("ref_root", "ref_model", "final_obj", "export_root", "export_drawable",
+                                             "preview_scene")}
+    n_parts = len(p.parts)
     bpy.ops.wm.save_mainfile()
     bpy.ops.wm.open_mainfile(filepath=os.path.join(WORK, "projet.blend"))
     p = proj()
-    check("Références conservées après réouverture",
-          all(getattr(p, k) is not None and getattr(p, k).name == v for k, v in names.items()),
-          str({k: (getattr(p, k).name if getattr(p, k) else None) for k in names}))
-    check("Réglages conservés", p.text == "NO RULES" and p.use_atlas)
+    check("Références conservées", all(getattr(p, k) is not None and getattr(p, k).name == v for k, v in names.items()),
+          {k: getattr(p, k).name if getattr(p, k) else None for k in names})
+    check("Composants et réglages conservés", len(p.parts) == n_parts and abs(p.thickness_2 - 0.025) < 1e-9)
+    check("Presets toujours disponibles", "argent" in presets.names())
+    check("Statut 8 après réouverture", status.step8(bpy.context, p)[0] == "Terminé", status.step8(bpy.context, p)[1])
     n_obj = len(bpy.data.objects)
-    run("pendant_create", update_only=True)
     run("preview_refresh")
-    check("Mise à jour après réouverture sans doublon", len(bpy.data.objects) == n_obj)
+    check("Actualisation après réouverture sans doublon", len(bpy.data.objects) == n_obj)
     errs = draw_all_panels()
-    check("Panneaux après réouverture", not errs, " | ".join(errs))
+    check("Panneaux après réouverture", not errs, errs)
 
-    # Chemins complémentaires --------------------------------------------------------------
-    print("\n[C] Chemins complémentaires")
-    old_chain = p.chain.name
-    bpy.ops.mesh.primitive_torus_add(major_radius=0.1, minor_radius=0.005, location=(0, -0.05, 0.45))
-    mine = bpy.context.active_object
-    mine.name = "Ma_Chaine_Scene"
-    check("Utiliser une chaîne de la scène", run("role_assign", role="chaine") == {"FINISHED"} and p.chain == mine
-          and mine.parent == p.jewel_root)
-    check("Ancienne chaîne non supprimée", old_chain in bpy.data.objects)
-    multi = os.path.join(WORK, "chaine_multi.obj")
-    for o in bpy.context.view_layer.objects.selected:
-        o.select_set(False)
-    a = bpy.data.objects.new("lien_a", bpy.data.meshes.new("lien_a"))
-    b = bpy.data.objects.new("lien_b", bpy.data.meshes.new("lien_b"))
-    for o, x in ((a, 0.0), (b, 0.02)):
-        o.data.from_pydata([(x, 0, 0), (x + 0.01, 0, 0), (x, 0.01, 0)], [], [(0, 1, 2)])
-        bpy.context.scene.collection.objects.link(o)
-        o.select_set(True)
-    bpy.ops.wm.obj_export(filepath=multi, export_selected_objects=True, export_materials=False)
-    for o in (a, b):
-        bpy.data.objects.remove(o)
-    p.chain_path, p.chain_join = multi, False
-    check("Import OBJ multi-objets (vide parent)", run("chain_import") == {"FINISHED"} and p.chain.type == "EMPTY"
-          and len([c for c in p.chain.children if c.type == "MESH"]) == 2)
-    check("Chaîne sélectionnée manuellement conservée", "Ma_Chaine_Scene" in bpy.data.objects)
-    p.chain_join = True
-    check("Import OBJ multi-objets (joints)", run("chain_import") == {"FINISHED"} and p.chain.type == "MESH"
-          and len(p.chain.data.polygons) == 2)
-    p.display_mode = "COLLECTIONS"
-    run("display_analyse")
-    for it in p.display_items:
-        it.use = it.kind == "COLLECTION" and it.name == "Presentoir"
-    check("Display en mode collections", run("display_load", force=True) == {"FINISHED"}
-          and any(o.name.startswith("Buste") for o in p.preview_scene.objects)
-          and not any(o.type == "CAMERA" for o in p.preview_scene.objects))
-
-    # Dépendance manquante ---------------------------------------------------------------
-    print("\n[D] Dépendance manquante")
+    print("\n[D] Dépendances")
     bpy.ops.preferences.addon_disable(module=SOLLUMZ)
-    info = szb.detect(refresh=True)
-    check("Sollumz désactivé détecté", not info.ok and info.errors)
-    check("Matériaux refusés sans Sollumz", run("materials_setup") != {"FINISHED"})
-    check("Export refusé sans Sollumz", run("export") != {"FINISHED"})
+    szb.detect(refresh=True)
+    check("Sollumz désactivé : export refusé", run("export") != {"FINISHED"})
     errs = draw_all_panels()
-    check("Panneaux sans Sollumz", not errs, " | ".join(errs))
+    check("Panneaux sans Sollumz", not errs, errs)
     bpy.ops.preferences.addon_enable(module=SOLLUMZ)
     check("Sollumz réactivé", szb.detect(refresh=True).ok)
-
-    check("Objets extérieurs jamais supprimés", external <= {o.name for o in bpy.data.objects},
-          str(external - {o.name for o in bpy.data.objects}))
+    check("Objets extérieurs jamais supprimés", external <= {o.name for o in bpy.data.objects})
 
     ok = sum(1 for r in RESULTS if r[1])
     print(f"\nRÉSULTAT : {ok}/{len(RESULTS)} vérifications réussies")

@@ -19,18 +19,17 @@ from .utils import (
     TAG_PREVIEW,
     TAG_PROJECT,
     abspath,
-    component_objects,
     get_project,
     hash_strings,
-    matrix_key,
+    part_meshes,
+    parts_signature,
     project_scene,
-    sources_signature,
     tag,
+    world_bounds,
 )
 
 KIND = "mcs_preview_kind"       # copy / root / marker / collection / material
 SRC = "mcs_preview_src"         # nom de l'objet ou du matériau source
-WRAP_MOD = "MCS_Epouser"
 
 
 def marker_key(path):
@@ -99,7 +98,6 @@ def unload(proj):
     proj.preview_root = None
     proj.display_loaded_path = ""
     proj.preview_signature = ""
-    proj.wrap_enabled = False
 
 
 def _scan_missing(new_images, new_libs):
@@ -223,20 +221,13 @@ def unit_factor(proj, context):
 
 
 def anchor_matrix(proj):
-    root = proj.jewel_root
-    base = root.matrix_world.normalized() if root else Matrix.Identity(4)
-    if proj.preview_anchor == "ROOT" or root is None:
-        return base
-    from .assembly import world_bounds
-    rot = base.to_quaternion().to_matrix().to_4x4()
-    if proj.preview_anchor == "BAIL" and proj.bail is not None:
-        lo, hi = world_bounds([proj.bail])
-        return Matrix.Translation((lo + hi) / 2) @ rot
-    b = world_bounds([o for o, r in component_objects(proj)])
+    """Point du bijou posé sur le repère : centre ou haut de sa boîte englobante (axes du monde)."""
+    b = world_bounds([o for o, r in part_meshes(proj)])
     if b is None:
-        return base
+        return Matrix.Identity(4)
     lo, hi = b
-    return Matrix.Translation(Vector(((lo.x + hi.x) / 2, (lo.y + hi.y) / 2, hi.z))) @ rot
+    z = hi[2] if proj.preview_anchor == "TOP" else (lo[2] + hi[2]) / 2
+    return Matrix.Translation(Vector(((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, z)))
 
 
 def apply_preview_transform(proj, context=None):
@@ -276,8 +267,7 @@ def _preview_material(proj, mat):
 
 
 def preview_signature(proj):
-    return hash_strings([sources_signature(proj), proj.preview_anchor,
-                         matrix_key(proj.jewel_root.matrix_world) if proj.jewel_root else ""])
+    return hash_strings([parts_signature(proj), proj.preview_anchor])
 
 
 def refresh(context, proj):
@@ -286,7 +276,7 @@ def refresh(context, proj):
         raise McsError("Chargez d'abord le display.")
     if proj.preview_marker is None:
         raise McsError("Définissez le repère de placement du bijou sur le display.")
-    comps = component_objects(proj)
+    comps = part_meshes(proj)
     if not comps:
         raise McsError("Aucun composant de bijou à placer.")
     for obj in preview_objects(proj, "copy"):
@@ -304,7 +294,7 @@ def refresh(context, proj):
     apply_preview_transform(proj, context)
 
     anchor_inv = anchor_matrix(proj).inverted()
-    arm = proj.ref_armature
+    arm = proj.ref_root
     prev_pose = arm.data.pose_position if arm is not None else None
     if arm is not None:
         arm.data.pose_position = "REST"
@@ -330,8 +320,6 @@ def refresh(context, proj):
     finally:
         if arm is not None:
             arm.data.pose_position = prev_pose
-    if proj.wrap_enabled and proj.wrap_target is not None:
-        apply_wrap(proj)
     proj.preview_scene.view_layers[0].update()
     proj.preview_signature = preview_signature(proj)
     # Vérification : une copie par composant, aucune donnée partagée avec les sources.
@@ -344,37 +332,6 @@ def refresh(context, proj):
         if c.data == src.data or any(m is not None and m in src.data.materials[:] for m in c.data.materials):
             raise McsError(f"{c.name} partage des données avec la source.")
     return copies
-
-
-def apply_wrap(proj):
-    target = proj.wrap_target
-    if target is None:
-        raise McsError("Choisissez la surface du display à épouser.")
-    if proj.preview_scene is None or target.name not in proj.preview_scene.objects:
-        raise McsError("La surface choisie doit appartenir à la scène d'aperçu (display).")
-    chains = [c for c in preview_objects(proj, "copy") if c.get("mcs_src_role") == "chaine"]
-    if not chains:
-        raise McsError("Placez d'abord le bijou sur le display.")
-    for c in chains:
-        mod = c.modifiers.get(WRAP_MOD) or c.modifiers.new(WRAP_MOD, "SHRINKWRAP")
-        mod.target = target
-        mod.wrap_method = proj.wrap_method
-        mod.offset = proj.wrap_offset
-        if proj.wrap_method == "PROJECT":
-            mod.use_negative_direction = True
-    proj.wrap_enabled = True
-    return chains
-
-
-def remove_wrap(proj):
-    n = 0
-    for c in preview_objects(proj, "copy"):
-        mod = c.modifiers.get(WRAP_MOD)
-        if mod is not None:
-            c.modifiers.remove(mod)
-            n += 1
-    proj.wrap_enabled = False
-    return n
 
 
 # ---------------------------------------------------------------------------
@@ -410,7 +367,7 @@ def render(context, proj):
     saved_samples = getattr(owner, attr) if owner else None
     stamp = time.strftime("%Y%m%d_%H%M%S")
     mode = "rapide" if proj.render_mode == "QUICK" else "final"
-    target = os.path.join(out_dir, f"{proj.ydd_name().replace('^', '_')}_{mode}_{stamp}")
+    target = os.path.join(out_dir, f"{proj.output_name.strip().replace('^', '_') or 'bijou'}_{mode}_{stamp}")
     try:
         scene.camera = cam
         r.resolution_x, r.resolution_y = proj.render_res_x, proj.render_res_y
@@ -549,30 +506,6 @@ class MIO_OT_preview_refresh(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class MIO_OT_wrap(bpy.types.Operator):
-    bl_idname = "mio_chain.wrap"
-    bl_label = "Épouser la forme"
-    bl_description = "Opération distincte : plaque la chaîne de l'APERÇU sur une surface du display (Shrinkwrap)"
-    bl_options = {"REGISTER", "UNDO"}
-
-    remove: bpy.props.BoolProperty(options={"HIDDEN", "SKIP_SAVE"})
-
-    def execute(self, context):
-        proj = get_project(context)
-        if self.remove:
-            n = remove_wrap(proj)
-            self.report({"INFO"}, f"Ajustement retiré de {n} copie(s).")
-            return {"FINISHED"}
-        try:
-            chains = apply_wrap(proj)
-        except McsError as exc:
-            self.report({"ERROR"}, str(exc))
-            return {"CANCELLED"}
-        self.report({"INFO"}, f"Chaîne de l'aperçu plaquée sur {proj.wrap_target.name} ({len(chains)} objet(s)). "
-                              "Le modèle FiveM n'est pas modifié.")
-        return {"FINISHED"}
-
-
 class MIO_OT_view_camera(bpy.types.Operator):
     bl_idname = "mio_chain.view_camera"
     bl_label = "Voir par la caméra"
@@ -632,4 +565,4 @@ class MIO_OT_render(bpy.types.Operator):
 
 
 CLASSES = (MIO_OT_display_analyse, MIO_OT_display_load, MIO_OT_marker_set, MIO_OT_marker_save,
-           MIO_OT_preview_refresh, MIO_OT_wrap, MIO_OT_view_camera, MIO_OT_back_to_project, MIO_OT_render)
+           MIO_OT_preview_refresh, MIO_OT_view_camera, MIO_OT_back_to_project, MIO_OT_render)

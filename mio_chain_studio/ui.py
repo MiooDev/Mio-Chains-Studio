@@ -1,42 +1,41 @@
 """Interface : onglet « Mio Chain » de la barre latérale de la vue 3D."""
 
 import json
-import math
 import os
 
 import bpy
 
-from . import atlas
-from . import dds
-from . import effects
+from . import colors
+from . import materials
+from . import presets
+from . import rigging
 from . import sollumz_bridge as szb
 from . import status
-from .materials import component_materials, unique_materials
+from . import svg
+from . import teef
 from .prefs import addon_prefs
 from .utils import (
     ROLE_LABELS,
-    ROLE_PROP,
-    ROLES_ALL,
     SEVERITY_ICONS,
     STATUS_ICONS,
-    component_objects,
     draw_issues,
     draw_wrapped,
     get_project,
+    part_meshes,
     project_scene,
     triangle_count,
 )
 
 INSTRUCTIONS = {
-    "1": "Vérifiez Sollumz, enregistrez le .blend et fixez les noms des fichiers du bijou.",
-    "2": "Écrivez le texte, créez le pendentif, importez ou choisissez la chaîne, puis ajustez la position.",
-    "3": "Choisissez les shaders, associez les textures, puis préparez l'atlas, le DDS et le YTD.",
-    "4": "Facultatif : émissif. Préparez les couleurs de sommets exigées par les shaders ped.",
-    "5": "Choisissez l'armature du ped, liez le bijou, générez les poids, vérifiez puis testez la déformation.",
-    "A": "Chargez votre display dans une scène à part, placez le bijou sur son repère, puis faites le rendu.",
-    "6": "Créez la copie d'export puis lancez la vérification. Corrigez toutes les erreurs bloquantes.",
-    "7": "Exportez avec Sollumz : les fichiers produits sont relus et contrôlés.",
-    "8": "Étapes manuelles dans CodeWalker puis FiveM. Cochez chaque point après l'avoir vérifié.",
+    "1": "Importez le SVG en courbes, sélectionnez-les, vérifiez leurs couches, puis préparez-les.",
+    "2": "Importez votre chaîne .obj ou ajoutez une chaîne de la scène, et désignez le pendentif.",
+    "3": "En Edit Mode, sélectionnez des faces, choisissez le type et le mode, puis appliquez.",
+    "4": "Réglez les paramètres du matériau actif et gérez vos presets (argent, or, diamant, glow…).",
+    "5": "Crée Color 1 (#FF8000, alpha 1) et Color 2 (#000000, alpha 0) en Face Corner / Byte Color.",
+    "6": "Peignez vous-même les zones de glow dans Color 1. Rien n'est rempli automatiquement.",
+    "7": "Crée une copie unique du bijou, pondérée à 100 % sur SKEL_Spine3 et liée au squelette masculin.",
+    "8": "Chargez les références, préparez le modèle, remplacez le mesh de référence, vérifiez puis exportez.",
+    "A": "Section séparée : votre display, une copie indépendante du bijou, la caméra et le rendu.",
 }
 
 
@@ -51,27 +50,12 @@ class _Base:
             st, _ = status.compute(context, get_project(context), self.step)
             self.layout.label(text="", icon=STATUS_ICONS[st])
 
-    def draw_status(self, context, proj, layout=None):
-        layout = layout or self.layout
+    def draw_status(self, context, proj):
         st, issues = status.compute(context, proj, self.step)
-        row = layout.row()
-        row.label(text=f"Statut : {st}", icon=STATUS_ICONS[st])
-        draw_wrapped(layout, context, INSTRUCTIONS[self.step])
-        draw_issues(layout, context, issues)
+        self.layout.label(text=f"Statut : {st}", icon=STATUS_ICONS[st])
+        draw_wrapped(self.layout, context, INSTRUCTIONS[self.step])
+        draw_issues(self.layout, context, issues)
 
-
-def _obj_row(layout, proj, role, assign=True):
-    row = layout.row(align=True)
-    row.prop(proj, ROLE_PROP[role], text=ROLE_LABELS[role])
-    if assign:
-        row.operator("mio_chain.role_assign", text="", icon="EYEDROPPER").role = role
-    obj = getattr(proj, ROLE_PROP[role])
-    if obj is not None:
-        row.operator("mio_chain.select_object", text="", icon="RESTRICT_SELECT_OFF").name = obj.name
-        row.operator("mio_chain.role_clear", text="", icon="X").role = role
-
-
-# ---------------------------------------------------------------------------
 
 class MIO_PT_main(_Base, bpy.types.Panel):
     bl_label = "Mio Chain Studio"
@@ -84,19 +68,30 @@ class MIO_PT_main(_Base, bpy.types.Panel):
             box = layout.box()
             box.label(text="Vous êtes dans la scène d'aperçu.", icon="SCENE_DATA")
             box.operator("mio_chain.back_to_project", icon="LOOP_BACK")
+        info = szb.detect()
+        layout.label(text=f"Sollumz {info.version_str if info.installed else 'absent'}"
+                          + ("" if info.ok else " — indisponible"), icon="CHECKMARK" if info.ok else "CANCEL")
+        for e in info.errors + info.warnings:
+            draw_wrapped(layout, context, e, icon="ERROR")
+        prefs = addon_prefs(context)
+        box = layout.box()
+        box.label(text="Dossier Teef (extrait de Teef.zip)", icon="FILE_FOLDER")
+        row = box.row(align=True)
+        if prefs:
+            row.prop(prefs, "teef_dir", text="")
+        row.operator("mio_chain.teef_check", text="", icon="VIEWZOOM")
+        ok, data, issues = status.cached("teef", lambda: status.teef_status(context))
+        box.label(text="Fichiers vérifiés" if ok else "Dossier Teef non valide", icon="CHECKMARK" if ok else "ERROR")
+        if not ok:
+            draw_issues(box, context, issues, limit=4)
         col = layout.column(align=True)
         for key, label, fn in status.STEPS:
             st, _ = status.compute(context, proj, key)
-            prefix = f"{key}. " if key.isdigit() else ""
-            col.label(text=f"{prefix}{label} — {st}", icon=STATUS_ICONS[st])
-        info = szb.detect()
-        layout.label(text=f"Sollumz : {info.version_str if info.installed else 'absent'}"
-                          f"{'' if info.ok else ' (indisponible)'}",
-                     icon="CHECKMARK" if info.ok else "CANCEL")
+            col.label(text=(f"{key}. " if key.isdigit() else "") + f"{label} — {st}", icon=STATUS_ICONS[st])
 
 
 class MIO_PT_step1(_Base, bpy.types.Panel):
-    bl_label = "1. Préparer le projet"
+    bl_label = "1. Préparation des SVG"
     bl_idname = "MIO_PT_step1"
     bl_options = {"DEFAULT_CLOSED"}
     step = "1"
@@ -105,151 +100,77 @@ class MIO_PT_step1(_Base, bpy.types.Panel):
         layout = self.layout
         proj = get_project(context)
         self.draw_status(context, proj)
-        row = layout.row(align=True)
-        row.operator("mio_chain.init_project", icon="COLLECTION_NEW")
-        row.operator("mio_chain.check_deps", text="", icon="FILE_REFRESH")
+        col = layout.column(align=True)
+        col.label(text="Épaisseurs réelles (mètres) :")
+        col.prop(proj, "thickness_1")
+        col.prop(proj, "thickness_2")
+        col.prop(proj, "thickness_3")
+        col.prop(proj, "layer_gap")
+        layout.prop(proj, "stack_axis")
+        srcs, skipped = svg.sources_from_selection(context, proj)
         box = layout.box()
-        box.label(text="Noms des fichiers", icon="SORTALPHA")
-        col = box.column(align=True)
-        col.prop(proj, "component")
-        col.prop(proj, "drawable_index")
-        col.prop(proj, "drawable_suffix")
-        col.prop(proj, "texture_variant")
-        col.prop(proj, "texture_suffix")
-        col.prop(proj, "file_prefix")
-        sub = box.column(align=True)
-        sub.scale_y = 0.8
-        sub.label(text=f"YDD : {proj.ydd_name()}")
-        sub.label(text=f"Drawable : {proj.drawable_name()}")
-        sub.label(text=f"Texture diffuse : {proj.texture_name()}")
-        sub.label(text=f"YTD : {proj.ytd_name()}")
-        draw_wrapped(box, context, "Motifs tirés de votre référence teef_012_u / teef_diff_012_a_uni.", icon="INFO")
-        layout.prop(proj, "ref_model")
-        draw_wrapped(layout, context, "Vidéo de référence inaccessible depuis l'environnement de développement : "
-                                      "ses réglages n'ont pas été repris (voir docs/INFORMATIONS_MANQUANTES.md).",
-                     icon="QUESTION")
+        box.label(text=f"Courbes sélectionnées : {len(srcs)}", icon="OUTLINER_OB_CURVE")
+        row = box.row(align=True)
+        row.operator("mio_chain.svg_detect", icon="SORTSIZE")
+        for n in (1, 2, 3, 0):
+            row.operator("mio_chain.svg_assign", text=str(n) if n else "∅").layer = n
+        for src in srcs[:15]:
+            r = box.row(align=True)
+            black = [m.name for m in src.data.materials if m and svg.is_black(m, proj.black_threshold)]
+            r.label(text=src.name + ("  (noir : matériau retiré, forme gardée)" if black else ""),
+                    icon="SHADING_SOLID" if black else "CURVE_DATA")
+            r.prop(src, "mio_svg_layer", text="")
+        if len(srcs) > 15:
+            box.label(text=f"… et {len(srcs) - 15} autre(s).")
+        counts = {n: sum(1 for s in srcs if s.mio_svg_layer == n) for n in (0, 1, 2, 3)}
+        box.label(text=f"Couche 1 : {counts[1]}   Couche 2 : {counts[2]}   Couche 3 : {counts[3]}   "
+                       f"Non affectées : {counts[0]}")
+        r = layout.row()
+        r.scale_y = 1.4
+        r.operator("mio_chain.svg_prepare", icon="MOD_SOLIDIFY")
+        layout.operator("mio_chain.svg_show_sources", icon="HIDE_OFF")
+        sub = layout.box()
+        sub.label(text="Avancé")
+        sub.prop(proj, "black_threshold")
+        sub.prop(proj, "height_tolerance")
 
 
 class MIO_PT_step2(_Base, bpy.types.Panel):
-    bl_label = "2. Créer et assembler le bijou"
+    bl_label = "2. Chaîne et composants"
     bl_idname = "MIO_PT_step2"
     bl_options = {"DEFAULT_CLOSED"}
     step = "2"
 
     def draw(self, context):
-        self.draw_status(context, get_project(context))
-
-
-class MIO_PT_step2_text(_Base, bpy.types.Panel):
-    bl_label = "Pendentif texte"
-    bl_parent_id = "MIO_PT_step2"
-
-    def draw(self, context):
         layout = self.layout
         proj = get_project(context)
-        layout.prop(proj, "text")
-        col = layout.column(align=True)
-        col.prop(proj, "font")
-        col.prop(proj, "font_path")
-        col = layout.column(align=True)
-        col.prop(proj, "text_size")
-        col.prop(proj, "letter_spacing")
-        col.prop(proj, "word_spacing")
-        col.prop(proj, "thickness")
-        col.prop(proj, "bevel_depth")
-        col.prop(proj, "bevel_resolution")
-        col.prop(proj, "curve_resolution")
+        self.draw_status(context, proj)
         box = layout.box()
-        box.prop(proj, "use_plate")
-        if proj.use_plate:
-            col = box.column(align=True)
-            for p in ("plate_margin", "plate_thickness", "plate_corner_radius", "plate_corner_segments", "plate_text_inset"):
-                col.prop(proj, p)
-        box = layout.box()
-        box.prop(proj, "use_bail")
-        if proj.use_bail:
-            box.prop(proj, "bail_offset")
-            box.prop(proj, "bail_rotation")
-            col = box.column(align=True)
-            for p in ("bail_radius", "bail_wire", "bail_segments", "bail_wire_segments"):
-                col.prop(proj, p)
-        row = layout.row(align=True)
-        row.scale_y = 1.3
-        row.operator("mio_chain.pendant_create", icon="FONT_DATA")
-        op = row.operator("mio_chain.pendant_create", text="Mettre à jour le pendentif", icon="FILE_REFRESH")
-        op.update_only = True
-        parts = component_objects(proj, ("texte", "plaque", "beliere"))
-        if parts:
-            box = layout.box()
-            total = 0
-            for obj, role in parts:
-                n = triangle_count(obj)
-                total += n
-                box.label(text=f"{ROLE_LABELS[role]} : {n} triangles")
-            box.label(text=f"Total pendentif : {total} triangles", icon="MESH_DATA")
-        if proj.text_source is not None:
-            layout.operator("mio_chain.select_object", text="Sélectionner la source du texte",
-                            icon="OUTLINER_OB_FONT").name = proj.text_source.name
-
-
-class MIO_PT_step2_chain(_Base, bpy.types.Panel):
-    bl_label = "Chaîne et composants"
-    bl_parent_id = "MIO_PT_step2"
-
-    def draw(self, context):
-        layout = self.layout
-        proj = get_project(context)
-        box = layout.box()
-        box.label(text="Importer une chaîne (.obj)", icon="IMPORT")
         box.prop(proj, "chain_path")
         row = box.row(align=True)
         row.prop(proj, "chain_forward")
         row.prop(proj, "chain_up")
         box.prop(proj, "chain_scale")
-        box.prop(proj, "chain_join")
         box.operator("mio_chain.chain_import", icon="IMPORT")
-        layout.label(text="Rôles (pipette = objet actif) :")
-        for role in ROLES_ALL:
-            _obj_row(layout, proj, role)
-        meshes = [o for o, r in component_objects(proj, ("chaine",))]
-        if meshes:
-            tris = sum(triangle_count(o) for o in meshes)
-            from .assembly import world_bounds
-            lo, hi = world_bounds(meshes)
-            d = hi - lo
-            layout.label(text=f"Chaîne : {tris} triangles, {d.x * 100:.1f} × {d.y * 100:.1f} × {d.z * 100:.1f} cm",
-                         icon="MESH_DATA")
-        layout.prop(proj, "ref_model")
-
-
-class MIO_PT_step2_assembly(_Base, bpy.types.Panel):
-    bl_label = "Assemblage"
-    bl_parent_id = "MIO_PT_step2"
-
-    def draw(self, context):
-        layout = self.layout
-        proj = get_project(context)
-        pivot, root = proj.pendant_pivot, proj.jewel_root
-        if pivot is None or root is None:
-            draw_wrapped(layout, context, "Créez le pendentif ou initialisez le projet pour obtenir les repères.")
-            return
+        row = layout.row(align=True)
+        row.operator("mio_chain.part_add", text="Sélection = chaîne", icon="LINKED").role = "CHAIN"
+        row.operator("mio_chain.part_add", text="Sélection = pendentif", icon="FONT_DATA").role = "PENDANT"
         box = layout.box()
-        box.label(text="Pendentif par rapport à la chaîne", icon="EMPTY_ARROWS")
-        box.prop(pivot, "location", text="Position")
-        box.prop(pivot, "rotation_euler", text="Rotation")
-        box.prop(pivot, "scale", text="Échelle")
-        box.operator("mio_chain.pendant_snap", icon="SNAP_ON")
-        box = layout.box()
-        box.label(text="Bijou entier (composants solidaires)", icon="OBJECT_ORIGIN")
-        box.prop(root, "location", text="Position")
-        box.prop(root, "rotation_euler", text="Rotation")
-        box.prop(root, "scale", text="Échelle")
-        draw_wrapped(layout, context, "Les objets restent séparés : rien n'est joint avant la copie d'export.",
-                     icon="INFO")
+        box.label(text="Composants du bijou :")
+        for i, part in enumerate(proj.parts):
+            r = box.row(align=True)
+            obj = part.obj
+            label = obj.name if obj else "(objet supprimé)"
+            tris = sum(triangle_count(o.data) for o, rr in part_meshes(proj) if o == obj or (obj and o in obj.children_recursive))
+            r.label(text=f"{ROLE_LABELS[part.role]} : {label} ({tris} tri.)",
+                    icon="LINKED" if part.role == "CHAIN" else "FONT_DATA")
+            if obj is not None:
+                r.operator("mio_chain.select_object", text="", icon="RESTRICT_SELECT_OFF").name = obj.name
+            r.operator("mio_chain.part_remove", text="", icon="X").index = i
 
 
 class MIO_PT_step3(_Base, bpy.types.Panel):
-    bl_label = "3. Matériaux et textures"
+    bl_label = "3. Matériaux sur les faces sélectionnées"
     bl_idname = "MIO_PT_step3"
     bl_options = {"DEFAULT_CLOSED"}
     step = "3"
@@ -258,95 +179,54 @@ class MIO_PT_step3(_Base, bpy.types.Panel):
         layout = self.layout
         proj = get_project(context)
         self.draw_status(context, proj)
-        col = layout.column(align=True)
-        for role in ROLES_ALL:
-            if getattr(proj, ROLE_PROP[role]) is not None:
-                col.prop(proj, f"shader_{role}", text=ROLE_LABELS[role])
-        layout.prop(proj, "show_all_shaders")
-        layout.operator("mio_chain.materials_setup", icon="MATERIAL")
-        for mat, role in unique_materials(proj):
-            box = layout.box()
-            row = box.row()
-            row.label(text=f"{mat.name} — {szb.material_shader(mat)}", icon="MATERIAL")
-            row.operator("mio_chain.preset_save", text="", icon="FILE_TICK").material = mat.name
-            row.operator("mio_chain.preset_load", text="", icon="PRESET").material = mat.name
-            used = szb.shader_texture_params(szb.material_shader(mat))
-            for node in szb.texture_nodes(mat):
-                if node.name not in used:
-                    continue
-                r = box.row(align=True)
-                img = node.image
-                if img is not None and img.filepath:
-                    w, h = img.size
-                    r.label(text=f"{node.name} : {szb.texture_name_of_image(img)} ({w}×{h})", icon="IMAGE_DATA")
-                else:
-                    r.label(text=f"{node.name} : —", icon="IMAGE")
-                op = r.operator("mio_chain.texture_assign", text="", icon="FILEBROWSER")
-                op.material, op.sampler = mat.name, node.name
-                if img is not None:
-                    r.prop(node.texture_properties, "embedded", text="", icon="PACKAGE")
-                    op = r.operator("mio_chain.texture_clear", text="", icon="X")
-                    op.material, op.sampler = mat.name, node.name
-        layout.prop(proj, "preset_name")
-
-
-class MIO_PT_step3_atlas(_Base, bpy.types.Panel):
-    bl_label = "Atlas, DDS et YTD"
-    bl_parent_id = "MIO_PT_step3"
-    bl_options = {"DEFAULT_CLOSED"}
-
-    def draw(self, context):
-        layout = self.layout
-        proj = get_project(context)
-        draw_wrapped(layout, context, "L'atlas regroupe les IMAGES dans une seule texture. Les matériaux et "
-                                      "shaders restent distincts et pointent vers l'atlas à l'export.", icon="INFO")
-        layout.prop(proj, "use_atlas")
-        row = layout.row(align=True)
-        row.prop(proj, "atlas_size")
-        row.prop(proj, "atlas_padding")
-        row = layout.row(align=True)
-        row.prop(proj, "atlas_normal")
-        row.prop(proj, "atlas_spec")
-        layout.operator("mio_chain.atlas_build", icon="TEXTURE")
-        if proj.atlas_layout:
-            state, ok = status.cached("atlas_state", lambda: atlas.atlas_state(proj))
-            layout.label(text=f"Atlas : {state}", icon="CHECKMARK" if ok else "ERROR")
-            if proj.atlas_image:
-                layout.label(text=f"{os.path.basename(proj.atlas_image.filepath)} "
-                                  f"({proj.atlas_image.size[0]}×{proj.atlas_image.size[1]})")
+        layout.prop(proj, "mat_kind", expand=True)
+        shader = proj.shader_for_kind()
+        layout.label(text=f"Shader Sollumz : {shader}", icon="SHADING_RENDERED")
+        layout.prop(proj, "mat_mode", expand=True)
         box = layout.box()
-        box.label(text="Conversion DDS", icon="FILE_IMAGE")
-        enc = dds.find_encoders()
-        box.label(text="Encodeur : " + (", ".join(n for n, p in enc) if enc else "aucun"),
-                  icon="CHECKMARK" if enc else "ERROR")
-        if not enc:
-            draw_wrapped(box, context, "Sans encodeur, l'image reste en PNG : convertissez-la vous-même, puis "
-                                       "indiquez le .dds ci-dessous. Une simple extension .dds n'est pas une conversion.")
-        row = box.row(align=True)
-        row.prop(proj, "dds_format")
-        row.prop(proj, "dds_mipmaps")
-        box.operator("mio_chain.dds_convert", icon="EXPORT")
-        if proj.use_atlas:
-            row = box.row(align=True)
-            row.prop(proj, "dds_path")
-            row.operator("mio_chain.dds_use_file", text="", icon="VIEWZOOM")
-        for kind, name, path, info, issues in status.cached("dds_status", lambda: atlas.dds_status(proj)):
-            if info:
-                box.label(text=f"{name}.dds : {info['format']} {info['width']}×{info['height']}, {info['mips']} mip",
-                          icon="CHECKMARK" if not issues else "ERROR")
-            else:
-                box.label(text=f"{name} : pas de DDS", icon="RADIOBUT_OFF")
-        box = layout.box()
-        box.label(text=f"YTD Sollumz : {proj.ytd_name()}", icon="TEXTURE_DATA")
-        box.prop(proj, "export_ytd")
-        box.operator("mio_chain.ytd_prepare", icon="ADD")
-        txd = szb.find_txd(project_scene(context), proj.ytd_name()) if szb.detect().ok else None
-        if txd is not None:
-            box.label(text="Contenu : " + (", ".join(t.name for t in txd.textures) or "vide"))
+        if proj.mat_mode == "PRESET":
+            box.prop(proj, "preset_name")
+            if proj.preset_name:
+                try:
+                    data = presets.load(proj.preset_name)
+                    complete, missing, absent = presets.status(data)
+                    box.label(text=f"Shader du preset : {data['shader']}",
+                              icon="CHECKMARK" if data["shader"] == shader else "ERROR")
+                    box.label(text="Preset complet" if complete else "Preset incomplet (voir étape 4)",
+                              icon="CHECKMARK" if complete else "ERROR")
+                except Exception as exc:
+                    draw_wrapped(box, context, str(exc), icon="ERROR")
+        else:
+            box.prop(proj, "diffuse_path")
+            box.prop(proj, "diffuse_embedded")
+            box.prop(proj, "bump_path")
+            box.prop(proj, "spec_path")
+            for label, path in (("Bump", proj.bump_path or teef.path_of("bump")),
+                                ("Spec", proj.spec_path or teef.path_of("spec"))):
+                exists = bool(path) and os.path.isfile(bpy.path.abspath(path))
+                box.label(text=f"{label} : {os.path.basename(path) if path else 'dossier Teef non défini'}",
+                          icon="CHECKMARK" if exists else "ERROR")
+        box.label(text="Bump et Spec : Embedded ; Bump en Non-Color (forcé).", icon="INFO")
+        col = layout.box().column(align=True)
+        col.label(text="Cube Projection (faces sélectionnées)")
+        col.prop(proj, "cube_size")
+        col.prop(proj, "cube_correct_aspect")
+        col.prop(proj, "cube_clip_to_bounds")
+        col.prop(proj, "cube_scale_to_bounds")
+        r = layout.row()
+        r.scale_y = 1.4
+        r.enabled = context.mode == "EDIT_MESH"
+        r.operator("mio_chain.apply_faces", icon="MATERIAL")
+        if context.mode != "EDIT_MESH":
+            layout.label(text="Passez en Edit Mode et sélectionnez des faces.", icon="EDITMODE_HLT")
+        sub = layout.box()
+        sub.label(text="Correspondance des choix (avancé)")
+        sub.prop(proj, "shader_ped")
+        sub.prop(proj, "shader_emissive")
 
 
 class MIO_PT_step4(_Base, bpy.types.Panel):
-    bl_label = "4. Effets"
+    bl_label = "4. Value Parameters et presets"
     bl_idname = "MIO_PT_step4"
     bl_options = {"DEFAULT_CLOSED"}
     step = "4"
@@ -355,41 +235,55 @@ class MIO_PT_step4(_Base, bpy.types.Panel):
         layout = self.layout
         proj = get_project(context)
         self.draw_status(context, proj)
+        obj = context.active_object
+        mat = obj.active_material if obj else None
         box = layout.box()
-        box.label(text="Émissif (lumineux)", icon="LIGHT_SUN")
-        shaders = effects.emissive_shaders() if szb.detect().ok else []
-        draw_wrapped(box, context, "Shader ped avec le paramètre emissiveMultiplier dans Sollumz : "
-                                   + (", ".join(shaders) or "aucun") + ". Il utilise aussi la map UVMap 1.")
-        box.prop(proj, "emissive_multiplier")
-        for role in ROLES_ALL:
-            mat = effects.role_material(proj, role)
-            if mat is None:
-                continue
-            row = box.row(align=True)
-            value = effects.emissive_value(mat)
-            row.label(text=f"{ROLE_LABELS[role]} : " + (f"émissif ({value:g})" if value is not None else "normal"))
-            op = row.operator("mio_chain.emissive_set", text="Activer" if value is None else "Appliquer la valeur")
-            op.role, op.enable = role, True
-            if value is not None:
-                op = row.operator("mio_chain.emissive_set", text="", icon="X")
-                op.role, op.enable = role, False
-        draw_wrapped(box, context, "Dans Blender, Sollumz montre une émission approximative. L'intensité réelle "
-                                   "dépend du jeu (jour, nuit, éclairage) : à vérifier dans FiveM.", icon="INFO")
+        if not szb.is_sollumz_material(mat):
+            box.label(text="Matériau actif : aucun matériau Sollumz.", icon="INFO")
+        else:
+            box.label(text=f"{mat.name} — {szb.material_shader(mat)}", icon="MATERIAL")
+            for name, node in materials.value_parameters(mat):
+                col = box.column(align=True)
+                col.label(text=name)
+                row = col.row(align=True)
+                for out in node.outputs:
+                    row.prop(out, "default_value", text=out.name)
+            for node in szb.texture_nodes(mat):
+                if node.name not in presets.SAMPLERS:
+                    continue
+                r = box.row(align=True)
+                img = node.image
+                r.label(text=f"{node.name} : {os.path.basename(img.filepath) if img and img.filepath else '—'}")
+                r.prop(node.texture_properties, "embedded", text="Embedded")
+                if img is not None:
+                    r.prop(img.colorspace_settings, "name", text="")
         box = layout.box()
-        box.label(text="Couleurs de sommets", icon="VPAINT_HLT")
-        box.prop(proj, "use_vertex_colors")
-        col = box.column(align=True)
-        col.prop(proj, "vcol0")
-        col.prop(proj, "vcol1")
-        draw_wrapped(box, context, "Les shaders ped lisent « Color 1 » et « Color 2 ». Valeurs par défaut lues dans "
-                                   "votre référence ; leur signification exacte n'est pas documentée ici.")
+        box.label(text="Presets (enregistrés dans la configuration de Blender)", icon="PRESET")
+        box.prop(proj, "preset_name")
+        if proj.preset_name:
+            try:
+                complete, missing, absent = presets.status(presets.load(proj.preset_name))
+                box.label(text="Complet" if complete else "Incomplet", icon="CHECKMARK" if complete else "ERROR")
+                for sampler in absent:
+                    r = box.row()
+                    r.label(text=f"{sampler} : non défini", icon="ERROR")
+                    r.operator("mio_chain.preset_relocate", text="Choisir").sampler = sampler
+                for sampler, path in missing:
+                    r = box.row()
+                    r.label(text=f"{sampler} introuvable : {os.path.basename(path)}", icon="ERROR")
+                    r.operator("mio_chain.preset_relocate", text="Relocaliser").sampler = sampler
+            except Exception as exc:
+                draw_wrapped(box, context, str(exc), icon="ERROR")
         row = box.row(align=True)
-        row.operator("mio_chain.vertex_colors_from_ref", icon="EYEDROPPER")
-        row.operator("mio_chain.vertex_colors_apply", icon="CHECKMARK")
+        row.operator("mio_chain.preset_apply", icon="CHECKMARK")
+        row.operator("mio_chain.preset_duplicate", text="Dupliquer", icon="DUPLICATE")
+        row.operator("mio_chain.preset_delete", text="Supprimer", icon="TRASH")
+        box.prop(proj, "new_preset_name")
+        box.operator("mio_chain.preset_save", icon="FILE_TICK")
 
 
 class MIO_PT_step5(_Base, bpy.types.Panel):
-    bl_label = "5. Préparer le rigging"
+    bl_label = "5. Color Attributes"
     bl_idname = "MIO_PT_step5"
     bl_options = {"DEFAULT_CLOSED"}
     step = "5"
@@ -398,43 +292,136 @@ class MIO_PT_step5(_Base, bpy.types.Panel):
         layout = self.layout
         proj = get_project(context)
         self.draw_status(context, proj)
-        layout.prop(proj, "ref_armature")
-        layout.prop(proj, "ref_weights_mesh")
-        arm = proj.ref_armature
-        if arm is not None:
-            layout.label(text=f"{len(arm.data.bones)} os dans {arm.name}", icon="ARMATURE_DATA")
-        layout.operator("mio_chain.rig_link", icon="LINKED")
-        for group, prop, bone_prop in (("CHAIN", "weight_method_chain", "bone_chain"),
-                                       ("PENDANT", "weight_method_pendant", "bone_pendant")):
+        layout.prop(proj, "color_targets", expand=True)
+        layout.label(text="Color 1 : #FF8000, alpha 1 — Color 2 : #000000, alpha 0")
+        draw_wrapped(layout, context, "Ce bouton efface les couleurs peintes de Color 1 et Color 2 "
+                                      "(confirmation demandée). Les autres attributs sont conservés.", icon="ERROR")
+        r = layout.row()
+        r.scale_y = 1.3
+        r.operator("mio_chain.colors_configure", icon="COLOR")
+
+
+class MIO_PT_step6(_Base, bpy.types.Panel):
+    bl_label = "6. Note pour le glow"
+    bl_idname = "MIO_PT_step6"
+    bl_options = {"DEFAULT_CLOSED"}
+    step = "6"
+
+    def draw(self, context):
+        layout = self.layout
+        proj = get_project(context)
+        self.draw_status(context, proj)
+        if status.uses_glow(proj):
             box = layout.box()
-            box.prop(proj, prop)
-            method = getattr(proj, prop)
-            if method == "SINGLE_BONE" and arm is not None:
-                box.prop_search(proj, bone_prop, arm.data, "bones", text="Os")
-            elif method == "TRANSFER":
-                draw_wrapped(box, context, "Copie les poids de la surface la plus proche du maillage source "
-                                           "(modificateur Data Transfer appliqué), puis garde 4 influences normalisées.")
-            elif method == "RIGID_ATTACH":
-                draw_wrapped(box, context, "Tout le pendentif reprend les poids de la chaîne au point d'attache : "
-                                           "il suit la chaîne sans se déformer. Pondérez la chaîne d'abord.")
-            row = box.row(align=True)
-            row.operator("mio_chain.rig_weights", text="Générer", icon="MOD_VERTEX_WEIGHT").group = group
-            row.operator("mio_chain.rig_restore", text="Restaurer", icon="LOOP_BACK").group = group
-        layout.prop(proj, "max_influences")
-        layout.operator("mio_chain.rig_check", icon="VIEWZOOM")
-        if proj.rig_report:
-            box = layout.box()
-            for it in proj.rig_report[:12]:
-                draw_wrapped(box, context, it.message, icon=SEVERITY_ICONS[it.severity])
+            draw_wrapped(box, context, colors.GLOW_NOTE, icon="LIGHT_SUN")
+            draw_wrapped(box, context, colors.SHORTCUT_NOTE, icon="INFO")
+            layout.operator("mio_chain.glow_paint_mode", icon="VPAINT_HLT")
+            obj = context.active_object
+            if obj is not None and obj.type == "MESH":
+                layout.prop(obj.data, "use_paint_mask", text="Masque de sélection des faces")
+            draw_wrapped(layout, context, "Ne relancez pas l'étape 5 après la peinture : elle effacerait votre travail.",
+                         icon="ERROR")
+            layout.prop(proj, "glow_painted")
+        else:
+            layout.label(text="Choisissez « Ped Emissive » à l'étape 3 pour afficher le rappel.")
+
+
+class MIO_PT_step7(_Base, bpy.types.Panel):
+    bl_label = "7. Rigging sur SKEL_Spine3"
+    bl_idname = "MIO_PT_step7"
+    bl_options = {"DEFAULT_CLOSED"}
+    step = "7"
+
+    def draw(self, context):
+        layout = self.layout
+        proj = get_project(context)
+        self.draw_status(context, proj)
+        if proj.ref_root is None:
+            layout.operator("mio_chain.teef_load", icon="IMPORT")
+        else:
+            layout.label(text=f"Squelette : {proj.ref_root.name} ({len(proj.ref_root.data.bones)} os)", icon="ARMATURE_DATA")
+        r = layout.row()
+        r.scale_y = 1.4
+        r.operator("mio_chain.rig_spine3", icon="GROUP_VERTEX")
+        final = proj.final_obj
+        if final is not None:
+            from .export import final_in_export
+            where = (f"dans la structure Drawable « {final.parent.name} »" if final_in_export(proj)
+                     else "hors structure Drawable")
+            layout.label(text=f"Mesh final : {final.name} ({where})", icon="MESH_DATA")
+            layout.label(text=f"{len(final.data.vertices)} sommets, {triangle_count(final.data)} triangles")
+            layout.operator("mio_chain.weight_paint", icon="WPAINT_HLT")
+
+
+class MIO_PT_step8(_Base, bpy.types.Panel):
+    bl_label = "8. Modèle d'export et remplacement"
+    bl_idname = "MIO_PT_step8"
+    bl_options = {"DEFAULT_CLOSED"}
+    step = "8"
+
+    def draw(self, context):
+        layout = self.layout
+        proj = get_project(context)
+        self.draw_status(context, proj)
+        row = layout.row(align=True)
+        row.operator("mio_chain.teef_load", icon="IMPORT")
+        op = row.operator("mio_chain.teef_load", text="", icon="FILE_REFRESH")
+        op.force = True
+        if proj.ref_root is not None:
+            layout.label(text=f"Référence : {proj.ref_root.name} > "
+                              f"{proj.ref_drawable.name if proj.ref_drawable else '?'} > "
+                              f"{proj.ref_model.name if proj.ref_model else '?'}", icon="OUTLINER")
         box = layout.box()
-        box.label(text="Vérification visuelle", icon="POSE_HLT")
-        if arm is not None:
-            box.prop_search(proj, "deform_bone", arm.data, "bones")
-        box.prop(proj, "deform_angle")
+        box.prop(proj, "output_name")
+        box.prop(proj, "drawable_name")
+        box.prop(proj, "lod_mode")
+        box.operator("mio_chain.export_prepare", icon="DUPLICATE")
+        if proj.export_root is not None:
+            from .export import strip_suffix
+            box.label(text=f"Fichier : {strip_suffix(proj.export_root.name)}.ydd — drawable exporté : "
+                           f"{strip_suffix(proj.export_drawable.name) if proj.export_drawable else '?'}", icon="FILE")
+            box.prop(proj, "export_target")
+            from .export import exported_lods, final_in_export
+            if final_in_export(proj):
+                box.label(text="Bijou en place. LOD : " + ", ".join(exported_lods(proj.final_obj)), icon="CHECKMARK")
+        r = box.row()
+        r.scale_y = 1.3
+        r.operator("mio_chain.export_replace", icon="UV_SYNC_SELECT")
+        layout.operator("mio_chain.export_check", icon="VIEWZOOM")
+        current = None
+        for it in proj.report:
+            label = {"ERROR": "Erreurs bloquantes", "WARNING": "Avertissements", "INFO": "Informations"}[it.severity]
+            if label != current:
+                current = label
+                layout.label(text=label, icon=SEVERITY_ICONS[it.severity])
+                rep = layout.box()
+            draw_wrapped(rep, context, f"[{it.category}] {it.message}" + (f" → {it.fix}" if it.fix else ""))
+        box = layout.box()
+        box.prop(proj, "export_dir")
+        info = szb.detect()
         row = box.row(align=True)
-        row.operator("mio_chain.pose_test", icon="PLAY")
-        row.operator("mio_chain.pose_reset", icon="LOOP_BACK")
-        box.operator("mio_chain.deform_confirm", icon="CHECKBOX_HLT")
+        row.prop(proj, "export_cwxml")
+        sub = row.row()
+        sub.enabled = info.native_available
+        sub.prop(proj, "export_native")
+        row = box.row(align=True)
+        row.prop(proj, "export_gen8")
+        row.prop(proj, "export_gen9")
+        r = box.row()
+        r.scale_y = 1.4
+        r.operator("mio_chain.export", icon="EXPORT")
+        if proj.last_export:
+            data = json.loads(proj.last_export)
+            res = layout.box()
+            res.label(text="Dernier export :", icon="FILE")
+            for line in data.get("lines", [])[:10]:
+                draw_wrapped(res, context, line)
+            for err in data.get("errors", []):
+                draw_wrapped(res, context, err, icon="CANCEL")
+            if data.get("formats") == ["CWXML"]:
+                draw_wrapped(res, context, "Restant : convertir le XML en .ydd dans CodeWalker.", icon="INFO")
+            res.operator("mio_chain.open_folder", icon="FILE_FOLDER").path = proj.export_dir
+        draw_wrapped(layout, context, "Un export Blender réussi ne valide pas le bijou dans FiveM.", icon="ERROR")
 
 
 class MIO_PT_display(_Base, bpy.types.Panel):
@@ -465,35 +452,21 @@ class MIO_PT_display(_Base, bpy.types.Panel):
         if proj.preview_scene is None:
             return
         box = layout.box()
-        box.label(text="Repère de placement", icon="EMPTY_ARROWS")
+        box.label(text="Repère", icon="EMPTY_ARROWS")
         row = box.row(align=True)
         row.operator("mio_chain.marker_set", text="Objet actif").source = "ACTIVE"
         row.operator("mio_chain.marker_set", text="Curseur 3D").source = "CURSOR"
         box.operator("mio_chain.marker_save", icon="FILE_TICK")
         box.prop(proj, "preview_anchor")
-        box = layout.box()
-        box.label(text="Bijou sur le display", icon="OUTLINER_OB_GROUP_INSTANCE")
-        row = box.row(align=True)
-        row.scale_y = 1.2
-        row.operator("mio_chain.preview_refresh", text="Placer le bijou sur le display", icon="IMPORT")
-        row.operator("mio_chain.preview_refresh", text="Actualiser l'aperçu", icon="FILE_REFRESH")
         box.prop(proj, "preview_loc")
         box.prop(proj, "preview_rot")
         box.prop(proj, "preview_scale")
         box.prop(proj, "preview_keep_materials")
-        draw_wrapped(box, context, "Le placement ne déforme pas la chaîne. Pour qu'elle épouse le display, "
-                                   "utilisez l'opération distincte ci-dessous (aperçu uniquement).", icon="INFO")
-        sub = box.box()
-        sub.prop(proj, "wrap_target")
-        row = sub.row(align=True)
-        row.prop(proj, "wrap_method", text="")
-        row.prop(proj, "wrap_offset")
-        row = sub.row(align=True)
-        row.operator("mio_chain.wrap", icon="MOD_SHRINKWRAP")
-        op = row.operator("mio_chain.wrap", text="", icon="X")
-        op.remove = True
+        row = box.row(align=True)
+        row.scale_y = 1.2
+        row.operator("mio_chain.preview_refresh", text="Placer le bijou", icon="IMPORT")
+        row.operator("mio_chain.preview_refresh", text="Actualiser la copie", icon="FILE_REFRESH")
         box = layout.box()
-        box.label(text="Rendu", icon="RENDER_STILL")
         box.prop(proj, "render_camera")
         row = box.row(align=True)
         row.prop(proj, "render_res_x")
@@ -503,113 +476,10 @@ class MIO_PT_display(_Base, bpy.types.Panel):
         box.prop(proj, "render_mode", expand=True)
         if proj.render_mode == "QUICK":
             box.prop(proj, "quick_samples")
-        box.label(text=f"Moteur du display : {proj.preview_scene.render.engine}")
         row = box.row(align=True)
         row.operator("mio_chain.view_camera", icon="CAMERA_DATA")
         row.operator("mio_chain.render", icon="RENDER_STILL")
 
 
-class MIO_PT_step6(_Base, bpy.types.Panel):
-    bl_label = "6. Vérifier avant export"
-    bl_idname = "MIO_PT_step6"
-    bl_options = {"DEFAULT_CLOSED"}
-    step = "6"
-
-    def draw(self, context):
-        layout = self.layout
-        proj = get_project(context)
-        self.draw_status(context, proj)
-        layout.operator("mio_chain.export_copy", icon="DUPLICATE")
-        layout.operator("mio_chain.check", icon="VIEWZOOM")
-        current = None
-        for it in proj.report:
-            label = {"ERROR": "Erreurs bloquantes", "WARNING": "Avertissements", "INFO": "Informations"}[it.severity]
-            if label != current:
-                current = label
-                layout.label(text=label, icon=SEVERITY_ICONS[it.severity])
-                box = layout.box()
-            row = box.row()
-            col = row.column()
-            draw_wrapped(col, context, f"[{it.category}] {it.message}")
-            if it.fix:
-                draw_wrapped(col, context, "→ " + it.fix)
-            if it.object_name and bpy.data.objects.get(it.object_name):
-                row.operator("mio_chain.select_object", text="", icon="RESTRICT_SELECT_OFF").name = it.object_name
-
-
-class MIO_PT_step7(_Base, bpy.types.Panel):
-    bl_label = "7. Exporter"
-    bl_idname = "MIO_PT_step7"
-    bl_options = {"DEFAULT_CLOSED"}
-    step = "7"
-
-    def draw(self, context):
-        layout = self.layout
-        proj = get_project(context)
-        self.draw_status(context, proj)
-        layout.prop(proj, "export_dir")
-        info = szb.detect()
-        row = layout.row(align=True)
-        row.prop(proj, "export_cwxml")
-        sub = row.row()
-        sub.enabled = info.native_available
-        sub.prop(proj, "export_native")
-        row = layout.row(align=True)
-        row.prop(proj, "export_gen8")
-        row.prop(proj, "export_gen9")
-        layout.prop(proj, "export_ytd")
-        r = layout.row()
-        r.scale_y = 1.4
-        r.operator("mio_chain.export", icon="EXPORT")
-        if proj.last_export_files:
-            data = json.loads(proj.last_export_files)
-            box = layout.box()
-            box.label(text="Derniers fichiers produits :", icon="FILE")
-            for line in data.get("lines", [])[:12]:
-                draw_wrapped(box, context, line)
-            for err in data.get("errors", []):
-                draw_wrapped(box, context, err, icon="CANCEL")
-            for warn in data.get("warnings", []):
-                draw_wrapped(box, context, warn, icon="ERROR")
-            if "CWXML" in data.get("formats", []) and "NATIVE" not in data.get("formats", []):
-                draw_wrapped(box, context, "Restant : convertir les XML en .ydd / .ytd dans CodeWalker (section 8).",
-                             icon="INFO")
-            box.operator("mio_chain.open_folder", icon="FILE_FOLDER").path = proj.export_dir
-        draw_wrapped(layout, context, "Un export Blender réussi ne valide pas le bijou dans FiveM.", icon="ERROR")
-
-
-class MIO_PT_step8(_Base, bpy.types.Panel):
-    bl_label = "8. Vérifier dans CodeWalker"
-    bl_idname = "MIO_PT_step8"
-    bl_options = {"DEFAULT_CLOSED"}
-    step = "8"
-
-    def draw(self, context):
-        layout = self.layout
-        proj = get_project(context)
-        self.draw_status(context, proj)
-        for it in proj.cw_checks:
-            box = layout.box()
-            box.prop(it, "done", text=it.label)
-            draw_wrapped(box, context, it.detail)
-        layout.operator("mio_chain.cw_reset", icon="FILE_REFRESH")
-
-
-class MIO_OT_check_deps(bpy.types.Operator):
-    bl_idname = "mio_chain.check_deps"
-    bl_label = "Vérifier les dépendances"
-    bl_description = "Détecte de nouveau Sollumz, szio et les encodeurs DDS"
-
-    def execute(self, context):
-        info = szb.detect(refresh=True)
-        status.invalidate()
-        enc = dds.find_encoders(refresh=True)
-        msg = (f"Sollumz {info.version_str} " + ("OK" if info.ok else "indisponible : " + " ".join(info.errors))
-               + f" ; encodeurs DDS : {', '.join(n for n, p in enc) or 'aucun'}.")
-        self.report({"INFO" if info.ok else "ERROR"}, msg)
-        return {"FINISHED"}
-
-
-CLASSES = (MIO_OT_check_deps, MIO_PT_main, MIO_PT_step1, MIO_PT_step2, MIO_PT_step2_text, MIO_PT_step2_chain,
-           MIO_PT_step2_assembly, MIO_PT_step3, MIO_PT_step3_atlas, MIO_PT_step4, MIO_PT_step5, MIO_PT_display,
-           MIO_PT_step6, MIO_PT_step7, MIO_PT_step8)
+CLASSES = (MIO_PT_main, MIO_PT_step1, MIO_PT_step2, MIO_PT_step3, MIO_PT_step4, MIO_PT_step5, MIO_PT_step6,
+           MIO_PT_step7, MIO_PT_step8, MIO_PT_display)

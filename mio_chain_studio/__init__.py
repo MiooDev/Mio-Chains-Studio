@@ -1,4 +1,4 @@
-"""Mio Chain Studio — création et préparation de chaînes personnalisées FiveM avec Sollumz.
+"""Mio Chain Studio — préparer ses propres pendentifs et chaînes pour FiveM avec Sollumz.
 
 Onglet « Mio Chain » de la barre latérale de la vue 3D (touche N).
 """
@@ -7,22 +7,22 @@ import bpy
 from bpy.app.handlers import persistent
 
 from . import (
-    assembly,
-    atlas,
+    colors,
+    components,
     display,
-    effects,
     export,
     materials,
-    pendant,
     prefs,
     props,
     rigging,
     sollumz_bridge,
     status,
+    svg,
+    teef,
     ui,
 )
 
-MODULES = (pendant, assembly, materials, atlas, effects, rigging, display, export, ui)
+MODULES = (svg, components, materials, colors, rigging, teef, export, display, ui)
 
 
 @persistent
