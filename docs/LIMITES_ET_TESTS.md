@@ -1,4 +1,4 @@
-# Vérifications, limites connues et tests restants (version 0.2.3)
+# Vérifications, limites connues et tests restants (version 0.2.4)
 
 ## Environnement des tests réellement exécutés
 

@@ -420,6 +420,13 @@ def main():
     mat = me.materials[me.polygons[int(np.nonzero(sel)[0][0])].material_index]
     mi_after = np.array([q.material_index for q in me.polygons])
     check("Shader ped.sps", szb.material_shader(mat) == "ped.sps", szb.material_shader(mat))
+    vals = {n.name: [round(o.default_value, 5) for o in n.outputs] for n in mat.node_tree.nodes
+            if n.bl_idname == "SOLLUMZ_NT_SHADER_Parameter"}
+    check("Value Parameters de base posés (Ped)", vals.get("specularIntensityMult") == [1997.0]
+          and vals.get("specularFalloffMult") == [1997.0] and vals.get("specularFresnel") == [0.45]
+          and vals.get("bumpiness") == [1.3] and vals.get("umGlobalParams") == [0.0025, 0.0025, 7.0, 7.0]
+          and vals.get("detailSettings") == [0.0, 0.0, 24.0] and vals.get("StubbleControl") == [2.0, 0.6]
+          and "emissiveMultiplier" not in vals, vals)
     check("Matériau sur les seules faces sélectionnées", (mi_after[~sel] == mi_before[~sel]).all()
           and all(me.materials[i] == mat for i in mi_after[sel]), n_sel)
     nodes = mat.node_tree.nodes
@@ -445,6 +452,10 @@ def main():
     check("Appliquer (Ped Emissive)", run("apply_faces") == {"FINISHED"})
     bpy.ops.object.mode_set(mode="OBJECT")
     emat = med.data.materials[med.data.polygons[0].material_index]
+    evals = {n.name: [round(o.default_value, 5) for o in n.outputs] for n in emat.node_tree.nodes
+             if n.bl_idname == "SOLLUMZ_NT_SHADER_Parameter"}
+    check("Value Parameters de base posés (Ped Emissive)", evals.get("emissiveMultiplier") == [1.0]
+          and evals.get("specularIntensityMult") == [1997.0] and evals.get("bumpiness") == [1.3], evals)
     check("Shader ped_emissive.sps + emissiveMultiplier + UVMap 1", szb.material_shader(emat) == "ped_emissive.sps"
           and szb.param_node(emat, "emissiveMultiplier") is not None and "UVMap 1" in med.data.uv_layers)
     p.mat_kind = "PED"
@@ -487,6 +498,9 @@ def main():
     check("Preset incomplet non appliqué", run("preset_apply") != {"FINISHED"})
     presets.relocate("or", "DiffuseSampler", diff)
     check("Relocaliser rend le preset complet", presets.status(presets.load("or"))[0])
+    params["specularIntensityMult"].outputs[0].default_value = 5.0
+    check("Réappliquer les Value Parameters de base", run("params_base") == {"FINISHED"}
+          and params["specularIntensityMult"].outputs[0].default_value == 1997.0)
     params["specularIntensityMult"].outputs[0].default_value = 0.1
     p.preset_name = "argent"
     check("Appliquer un preset", run("preset_apply") == {"FINISHED"}

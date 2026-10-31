@@ -257,6 +257,10 @@ class MIO_PT_step4(_Base, bpy.types.Panel):
                 r.prop(node.texture_properties, "embedded", text="Embedded")
                 if img is not None:
                     r.prop(img.colorspace_settings, "name", text="")
+            box.operator("mio_chain.params_base", icon="LOOP_BACK")
+        draw_wrapped(layout, context, "Mode Personnalisé : les nouveaux matériaux reçoivent ces valeurs de base "
+                                      "(specularIntensityMult et specularFalloffMult 1997, specularFresnel 0,45, "
+                                      "bumpiness 1,3, emissiveMultiplier 1).", icon="INFO")
         box = layout.box()
         box.label(text="Presets (enregistrés dans la configuration de Blender)", icon="PRESET")
         box.prop(proj, "preset_name")

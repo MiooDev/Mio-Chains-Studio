@@ -26,6 +26,28 @@ from .utils import (
 SAMPLERS = presets.SAMPLERS
 REQUIRED_EMBEDDED = ("BumpSampler", "SpecSampler")
 
+# Value Parameters de base (votre réglage du matériau MCS_glow). umGlobalParams vaut 0,0025, valeur de
+# Sollumz que le panneau affiche arrondie à « 0.002 ». Seuls les paramètres présents dans le shader sont posés.
+BASE_VALUE_PARAMS = {
+    "umGlobalParams": [0.0025, 0.0025, 7.0, 7.0],
+    "envEffFatThickness": [25.0, 25.0],
+    "specularIntensityMult": [1997.0],
+    "specularFalloffMult": [1997.0],
+    "specularFresnel": [0.45],
+    "bumpiness": [1.3],
+    "emissiveMultiplier": [1.0],
+    "detailSettings": [0.0, 0.0, 24.0],
+    "StubbleControl": [2.0, 0.6],
+}
+
+
+def base_params_for(shader):
+    """Value Parameters de base limités à ceux que le shader possède réellement."""
+    definition = szb.find_shader(shader)
+    if definition is None:
+        return {}
+    return {k: list(v) for k, v in BASE_VALUE_PARAMS.items() if k in definition.parameter_map}
+
 
 # ---------------------------------------------------------------------------
 # Description du matériau à appliquer
@@ -42,7 +64,7 @@ def spec_from_ui(proj):
             raise McsError(f"Le preset « {proj.preset_name} » utilise {data['shader']} alors que le type choisi "
                            f"correspond à {shader}. Changez de type ou de preset.")
     else:
-        data = {"version": presets.FORMAT, "shader": shader, "textures": {}, "params": {}}
+        data = {"version": presets.FORMAT, "shader": shader, "textures": {}, "params": base_params_for(shader)}
         if not proj.diffuse_path:
             raise McsError("Choisissez la texture DiffuseSampler.")
         data["textures"]["DiffuseSampler"] = {"path": abspath(proj.diffuse_path),
@@ -429,5 +451,33 @@ class MIO_OT_preset_relocate(bpy.types.Operator):
         return {"FINISHED"}
 
 
-CLASSES = (MIO_OT_apply_faces, MIO_OT_preset_save, MIO_OT_preset_apply, MIO_OT_preset_duplicate,
+class MIO_OT_params_base(bpy.types.Operator):
+    bl_idname = "mio_chain.params_base"
+    bl_label = "Appliquer les Value Parameters de base"
+    bl_description = ("Remet les Value Parameters du matériau actif aux valeurs de base "
+                      "(specularIntensityMult 1997, specularFalloffMult 1997, specularFresnel 0,45, bumpiness 1,3…)")
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        obj = context.active_object
+        mat = obj.active_material if obj else None
+        if not szb.is_sollumz_material(mat):
+            self.report({"ERROR"}, "Le matériau actif n'est pas un matériau Sollumz.")
+            return {"CANCELLED"}
+        params = base_params_for(szb.material_shader(mat))
+        applied = []
+        for name, values in params.items():
+            node = szb.param_node(mat, name)
+            if node is not None and len(values) == len(node.outputs):
+                for out, v in zip(node.outputs, values):
+                    out.default_value = v
+                applied.append(name)
+        if not applied:
+            self.report({"ERROR"}, f"Aucun paramètre de base ne correspond au shader {szb.material_shader(mat)}.")
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"{mat.name} : {len(applied)} Value Parameters de base appliqués.")
+        return {"FINISHED"}
+
+
+CLASSES = (MIO_OT_apply_faces, MIO_OT_params_base, MIO_OT_preset_save, MIO_OT_preset_apply, MIO_OT_preset_duplicate,
            MIO_OT_preset_delete, MIO_OT_preset_relocate)

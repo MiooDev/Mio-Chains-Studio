@@ -6,12 +6,12 @@ Addon Blender pour préparer **vos propres pendentifs et chaînes FiveM** avec *
 |---|---|
 | Blender | **5.2** (vérifié avec 5.2.3 LTS) |
 | Sollumz | **2.9.0** (dernière version publiée, vérifiée) avec sa dépendance `szio` |
-| Addon | 0.2.3 |
+| Addon | 0.2.4 |
 
 ## Installation
 
 1. Installez et activez **Sollumz 2.9.0** et ses dépendances (préférences de Sollumz → *Install dependencies*).
-2. Blender → **Édition → Préférences → Extensions** → menu **⌄** → **Installer depuis le disque…** → `dist/mio_chain_studio-0.2.3.zip`.
+2. Blender → **Édition → Préférences → Extensions** → menu **⌄** → **Installer depuis le disque…** → `dist/mio_chain_studio-0.2.4.zip`.
 3. Extrayez **Teef.zip** en conservant son arborescence :
    ```
    Teef/
@@ -69,6 +69,11 @@ Les courbes d'origine sont conservées, masquées, comme source. Un nouveau clic
 
 ### 4 — Value Parameters et presets
 - Les paramètres du shader du matériau actif sont affichés et modifiables.
+- **Valeurs de base** : en mode Personnalisé, chaque nouveau matériau reçoit
+  umGlobalParams 0,0025 / 0,0025 / 7 / 7, envEffFatThickness 25 / 25, specularIntensityMult 1997,
+  specularFalloffMult 1997, specularFresnel 0,45, bumpiness 1,3, emissiveMultiplier 1 (Ped Emissive seulement),
+  detailSettings 0 / 0 / 24, StubbleControl 2 / 0,6. **Appliquer les Value Parameters de base** les remet sur le
+  matériau actif. Un preset garde ses propres valeurs.
 - Presets : **Enregistrer**, **Appliquer**, **Dupliquer**, **Supprimer**.
 - Un preset enregistre le shader, les chemins de textures, Embedded, l'espace colorimétrique et les paramètres.
 - Les presets sont stockés en JSON dans le dossier de configuration de Blender et restent disponibles après fermeture.
