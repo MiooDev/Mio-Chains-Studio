@@ -6,12 +6,12 @@ Addon Blender pour préparer **vos propres pendentifs et chaînes FiveM** avec *
 |---|---|
 | Blender | **5.2** (vérifié avec 5.2.3 LTS) |
 | Sollumz | **2.9.0** (dernière version publiée, vérifiée) avec sa dépendance `szio` |
-| Addon | 0.2.4 |
+| Addon | 0.3.0 |
 
 ## Installation
 
 1. Installez et activez **Sollumz 2.9.0** et ses dépendances (préférences de Sollumz → *Install dependencies*).
-2. Blender → **Édition → Préférences → Extensions** → menu **⌄** → **Installer depuis le disque…** → `dist/mio_chain_studio-0.2.4.zip`.
+2. Blender → **Édition → Préférences → Extensions** → menu **⌄** → **Installer depuis le disque…** → `dist/mio_chain_studio-0.3.0.zip`.
 3. Extrayez **Teef.zip** en conservant son arborescence :
    ```
    Teef/
@@ -93,29 +93,35 @@ En mode émissif, le panneau affiche le rappel de peinture (couleur principale `
 - Un bouton active Color 1 et passe en Vertex Paint. **Rien n'est peint automatiquement**, et l'étape 5 n'est jamais relancée d'elle-même.
 
 ### 7 — Rigging sur SKEL_Spine3
-**Rigger sur SKEL_Spine3** crée une **copie** (`MCS_Bijou_Final`) : vos sources restent modifiables. Le bouton :
-- réunit uniquement les composants désignés en un seul Mesh Object ;
-- conserve placement, matériaux, UV et Color Attributes ;
-- assigne tous les sommets au groupe `SKEL_Spine3` avec un poids de 1, par l'API ;
-- retire les autres groupes ;
-- lie le mesh au squelette masculin fourni (modificateur Armature).
+1. **Charger les références Teef** : Sollumz importe `teef_000_u.ydd.xml` avec `mp_m_freemode_01.yft.xml` comme squelette externe (mode « Saved »), directement dans la Scene Collection.
+2. **Rigger sur SKEL_Spine3** crée le mesh **`mio_chain`**, une copie : vos sources restent modifiables. Le bouton :
+   - réunit uniquement les composants désignés en un seul Mesh Object ;
+   - conserve placement, matériaux, UV et Color Attributes ;
+   - assigne tous les sommets au groupe `SKEL_Spine3` avec un poids de 1, par l'API, et retire les autres groupes ;
+   - lie `mio_chain` à l'armature `teef_000_u` (modificateur Armature) ;
+   - le met **à la place de `SKEL_ROOT`** sous `teef_012_u` : même parent, type Sollumz, skinning et LOD, position monde inchangée. La structure est vérifiée **avant** de retirer le mesh `SKEL_ROOT`. L'os `SKEL_ROOT` et l'armature ne sont jamais touchés.
 
-**Contrôler en Weight Paint** permet la vérification visuelle.
+Résultat, comme dans votre Outliner :
 
-### 8 — Modèle d'export et remplacement du mesh
-1. **Charger les références Teef** : Sollumz importe `teef_000_u.ydd.xml` avec `mp_m_freemode_01.yft.xml` comme squelette externe (mode « Saved »). On obtient `REF_teef_000_u` (armature, 128 os) > `REF_teef_012_u` > `SKEL_ROOT` (mesh).
-2. **Préparer le modèle d'export** : copie de cette structure sous **vos** noms (fichier YDD et drawable, `teef_000_u` par défaut, pas `teef_012_u`).
-3. **Remplacer le mesh de référence par mon bijou** :
-   - le mesh de référence est repéré dans la **nouvelle hiérarchie** (ou choisi explicitement), jamais d'après son seul nom ;
-   - le bijou prend sa place : même parent, type Sollumz, skinning et liaison au squelette, position monde inchangée ;
-   - la structure est vérifiée **avant** de retirer le mesh de référence de la copie. Os et armature ne sont jamais touchés.
-   - **LOD** : *High uniquement* (Medium et Low vides) ou *High copié en Medium et Low*. Cette seconde option est affichée comme **non optimisée**.
-4. **Vérifier avant export**, puis **Exporter avec Sollumz**. Les fichiers produits sont relus :
-   - drawable et nom de sortie ;
-   - LOD exportés ;
-   - 100 % des sommets sur l'os 38 (SKEL_Spine3) ;
-   - squelette exclu ;
-   - DDS Bump et Spec intégrés.
+```
+Scene Collection
+└─ teef_000_u            (armature, données teef_000_u.skel, 128 os)
+   └─ teef_012_u         (drawable)
+      └─ mio_chain       (votre bijou)
+```
+
+Si `mio_chain` existe déjà quand vous chargez (ou rechargez) les références, il est placé automatiquement dans la nouvelle structure. **Contrôler en Weight Paint** permet la vérification visuelle.
+
+### 8 — Structure d'export et export
+- **Noms** : armature et fichier `teef_000_u`, drawable `teef_012_u` par défaut, modifiables. Les objets sont renommés à l'export si besoin.
+- **LOD** : *High uniquement* (Medium et Low vides) ou *High copié en Medium et Low*, affichée comme **non optimisée**. Le réglage est réappliqué au placement et juste avant l'export.
+- **Placer mio_chain dans la structure** refait le placement si besoin, par exemple après un rechargement. Si le mesh de référence porte un autre nom, choisissez-le dans « Mesh à remplacer ».
+- **Vérifier avant export**, puis **Exporter avec Sollumz**. Les fichiers produits sont relus :
+  - drawable et nom de sortie ;
+  - LOD exportés ;
+  - 100 % des sommets sur l'os 38 (SKEL_Spine3) ;
+  - squelette exclu ;
+  - DDS Bump et Spec intégrés.
 
 Un export Blender réussi **ne valide pas** le bijou dans FiveM : testez-le en jeu.
 

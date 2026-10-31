@@ -1,8 +1,9 @@
-"""Étape 8 : modèle d'export (copie des références Teef), remplacement du mesh de référence, vérification, export.
+"""Étape 8 : structure d'export unique, placement de mio_chain à la place de SKEL_ROOT, vérification, export.
 
-La copie d'export reprend la structure importée par Sollumz : armature Drawable Dictionary (squelette
-masculin, 128 os) > Drawable > Drawable Model. Seul l'objet maillage de référence de la COPIE est retiré,
-après vérification de la nouvelle structure ; l'armature et ses os ne sont jamais modifiés.
+« Charger les références Teef » importe avec Sollumz : teef_000_u (armature Drawable Dictionary, squelette
+masculin, 128 os) > teef_012_u (Drawable) > SKEL_ROOT (Drawable Model). Cette structure EST celle qui est
+exportée : le mesh mio_chain (étape 7) y prend la place de SKEL_ROOT, après vérification. L'armature et
+ses os ne sont jamais modifiés.
 """
 
 import json
@@ -21,7 +22,6 @@ from .prefs import addon_prefs
 from .utils import (
     McsError,
     TAG_DISPLAY,
-    TAG_EXPORT,
     TAG_PREVIEW,
     TAG_REFERENCE,
     abspath,
@@ -29,13 +29,10 @@ from .utils import (
     hash_strings,
     link_only_to,
     matrix_key,
-    project_collection,
     project_scene,
-    tag,
     triangle_count,
 )
 
-KEY_REF_COPY = "mcs_reference_copy"
 BONE_INDEX = 38
 COLUMNS = {"Position": 3, "BlendWeights": 4, "BlendIndices": 4, "Normal": 3, "Colour0": 4, "Colour1": 4,
            "Tangent": 4, **{f"TexCoord{i}": 2 for i in range(8)}}
@@ -45,107 +42,70 @@ def strip_suffix(name):
     return re.sub(r"\.\d{3}$", "", name)
 
 
-def export_objects(proj):
-    pid = proj.project_id
-    return [o for o in bpy.data.objects if pid and o.get("mcs_project") == pid and o.get(TAG_EXPORT)]
-
-
-def final_in_export(proj):
-    final, root = proj.final_obj, proj.export_root
+def final_placed(proj):
+    final, root = proj.final_obj, proj.ref_root
     return final is not None and root is not None and final in root.children_recursive
 
 
 def release_final(proj):
-    """Sort le mesh final de la copie d'export en gardant sa position monde (avant suppression de la copie)."""
+    """Sort mio_chain de la structure en gardant sa position monde (avant un rechargement des références)."""
     final = proj.final_obj
-    if final is None or not final_in_export(proj):
+    if final is None or not final_placed(proj):
         return False
     world = final.matrix_world.copy()
     final.parent = None
     final.matrix_world = world
     final.sollum_type = "sollumz_none"
-    if proj.ref_root is not None:
-        rigging.ensure_armature_modifier(final, proj.ref_root)
     return True
 
 
-def prepare_model(context, proj):
-    szb.require()
-    problems = teef.verify_armature(proj.ref_root)
-    if problems or proj.ref_drawable is None or proj.ref_model is None:
-        raise McsError("Références Teef absentes ou incomplètes : cliquez « Charger les références Teef ».")
-    if not proj.output_name.strip() or not proj.drawable_name.strip():
-        raise McsError("Indiquez le nom du fichier YDD et le nom du drawable.")
-    release_final(proj)
-    for obj in export_objects(proj):
-        data = obj.data
-        bpy.data.objects.remove(obj, do_unlink=True)
-        if isinstance(data, bpy.types.Mesh) and data.users == 0:
-            bpy.data.meshes.remove(data)
-    coll = project_collection(context, proj, "MCS_Export", "export")
-    root = proj.ref_root.copy()            # partage les données d'armature : os, hiérarchie et transformations intactes
-    root.name = proj.output_name.strip()
-    root.parent = None
-    root.matrix_world = proj.ref_root.matrix_world.copy()
-    drawable = proj.ref_drawable.copy()
-    drawable.name = proj.drawable_name.strip()
-    model = proj.ref_model.copy()
-    for obj in (root, drawable, model):
-        for key in (TAG_REFERENCE,):
-            if key in obj:
-                del obj[key]
-        tag(obj, proj, role="export", **{TAG_EXPORT: 1})
-        link_only_to(obj, coll)
-    model[KEY_REF_COPY] = 1
-    drawable.parent = root
-    drawable.matrix_parent_inverse = proj.ref_drawable.matrix_parent_inverse.copy()
-    drawable.matrix_basis = proj.ref_drawable.matrix_basis.copy()
-    model.parent = drawable
-    model.matrix_parent_inverse = proj.ref_model.matrix_parent_inverse.copy()
-    model.matrix_basis = proj.ref_model.matrix_basis.copy()
-    rigging.ensure_armature_modifier(model, root)
-    proj.export_root, proj.export_drawable, proj.export_target = root, drawable, model
-    proj.replaced_signature = ""
-    found_drawable, models = teef.find_structure(root)
-    if found_drawable != drawable or models != [model] or teef.verify_armature(root):
-        raise McsError("Copie d'export incohérente après création.")
-    return root, drawable, model
-
-
 def _target_candidates(proj):
-    drawable = proj.export_drawable
+    drawable = proj.ref_drawable
     if drawable is None:
         return []
-    return [c for c in drawable.children if c.type == "MESH" and c.sollum_type == szb.MODEL and c != proj.final_obj]
+    return [c for c in drawable.children if c.type == "MESH" and c.sollum_type == szb.MODEL
+            and c != proj.final_obj and c.get(TAG_REFERENCE)]
 
 
-def replace_reference(context, proj):
+def apply_lods(proj):
+    """LOD du mesh placé selon le réglage : High seul, ou High recopié en Medium et Low (non optimisé)."""
+    final = proj.final_obj
+    high = final.data
+    dup = proj.lod_mode == "DUPLICATE"
+    szb.set_lods(final, {"sollumz_high": high, "sollumz_medium": high if dup else None,
+                         "sollumz_low": high if dup else None, "sollumz_verylow": None})
+
+
+def place_final(context, proj):
+    """Met mio_chain à la place du mesh de référence (SKEL_ROOT) : même parent, type Sollumz, skinning, LOD."""
     szb.require()
-    root, drawable, final = proj.export_root, proj.export_drawable, proj.final_obj
-    if root is None or drawable is None or not root.get(TAG_EXPORT):
-        raise McsError("Préparez d'abord le modèle d'export.")
+    root, drawable, final = proj.ref_root, proj.ref_drawable, proj.final_obj
+    if root is None or drawable is None or teef.verify_armature(root):
+        raise McsError("Références Teef non chargées : cliquez « Charger les références Teef ».")
     if final is None:
-        raise McsError("Aucun mesh final : cliquez « Rigger sur SKEL_Spine3 » (étape 7).")
+        raise McsError("Aucun mesh mio_chain : cliquez « Rigger sur SKEL_Spine3 » (étape 7).")
     state, fresh = rigging.final_state(proj)
     if not fresh:
-        raise McsError(f"Mesh final {state} : relancez l'étape 7.")
-    mod = next((m for m in final.modifiers if m.type == "ARMATURE"), None)
-    problems = rigging.verify(proj, final, arm=mod.object if mod else None)
+        raise McsError(f"mio_chain {state} : relancez l'étape 7.")
+    problems = rigging.verify(proj, final, arm=root)
     if problems:
-        raise McsError("Mesh final non conforme : " + " ".join(problems))
+        raise McsError("mio_chain non conforme : " + " ".join(problems))
     target = proj.export_target
     if target is None:
         candidates = _target_candidates(proj)
         if len(candidates) > 1:
             raise McsError("Plusieurs meshes sous le drawable : choisissez le mesh à remplacer.")
         target = candidates[0] if candidates else None
-    if target is not None:
-        if target == final or target.type != "MESH" or target not in root.children_recursive or not target.get(TAG_EXPORT):
-            raise McsError(f"{target.name} n'est pas un mesh de la copie d'export : remplacement refusé.")
-    if target is None and final_in_export(proj):
-        raise McsError("Le bijou est déjà en place dans le modèle d'export.")
+    if target is not None and (target == final or target.type != "MESH" or target not in root.children_recursive
+                               or not target.get(TAG_REFERENCE)):
+        raise McsError(f"{target.name} n'est pas le mesh de référence de la structure Teef : remplacement refusé.")
+    if target is None and final_placed(proj):
+        apply_lods(proj)                      # déjà en place : seuls les LOD sont réappliqués
+        problems = verify_replacement(proj)
+        if problems:
+            raise McsError("Structure non conforme : " + " ".join(problems))
+        return None
 
-    # État à restaurer en cas d'échec.
     saved = dict(parent=final.parent, parent_type=final.parent_type, parent_bone=final.parent_bone,
                  inverse=final.matrix_parent_inverse.copy(), world=final.matrix_world.copy(),
                  sollum=final.sollum_type, lods=szb.lod_meshes(final),
@@ -159,11 +119,8 @@ def replace_reference(context, proj):
         final.parent_bone = target.parent_bone if target is not None else ""
         final.matrix_parent_inverse = parent.matrix_world.inverted()
         final.matrix_world = world
-        link_only_to(final, proj.export_root.users_collection[0])
-        high = final.data
-        dup = proj.lod_mode == "DUPLICATE"
-        szb.set_lods(final, {"sollumz_high": high, "sollumz_medium": high if dup else None,
-                             "sollumz_low": high if dup else None, "sollumz_verylow": None})
+        link_only_to(final, drawable.users_collection[0])
+        apply_lods(proj)
         rigging.ensure_armature_modifier(final, root)
         context.view_layer.update()
         problems = verify_replacement(proj, world, keep_target=target)
@@ -190,6 +147,8 @@ def replace_reference(context, proj):
     removed = None
     if target is not None:
         removed = target.name
+        if proj.ref_model == target:
+            proj.ref_model = None
         bpy.data.objects.remove(target, do_unlink=True)
     proj.export_target = None
     problems = verify_replacement(proj, world)
@@ -205,28 +164,39 @@ def exported_lods(final):
 
 def verify_replacement(proj, world=None, keep_target=None):
     problems = []
-    root, drawable, final = proj.export_root, proj.export_drawable, proj.final_obj
+    root, drawable, final = proj.ref_root, proj.ref_drawable, proj.final_obj
     problems += [m for s, m, f in teef.verify_armature(root)]
     found, models = teef.find_structure(root) if root else (None, [])
     if found != drawable:
-        problems.append("drawable introuvable sous l'armature d'export.")
+        problems.append("drawable introuvable sous l'armature.")
     expected = [final] + ([keep_target] if keep_target is not None else [])
     if sorted(o.name for o in models) != sorted(o.name for o in expected if o is not None):
         problems.append(f"meshes sous le drawable : {[o.name for o in models]}.")
     if final is not None:
         if final.parent != drawable:
-            problems.append("le mesh final n'a pas le drawable pour parent.")
+            problems.append("mio_chain n'a pas le drawable pour parent.")
         if world is not None and max(abs(a - b) for ra, rb in zip(final.matrix_world, world) for a, b in zip(ra, rb)) > 1e-5:
             problems.append("la position monde du bijou a changé.")
         mod = next((m for m in final.modifiers if m.type == "ARMATURE"), None)
         if mod is None or mod.object != root:
-            problems.append("le mesh final n'est pas lié à l'armature d'export.")
+            problems.append("mio_chain n'est pas lié à l'armature teef_000_u.")
         problems += rigging.verify(proj, final, arm=root)
-        ref_lods = {m.name for m in szb.lod_meshes(proj.ref_model).values() if m} if proj.ref_model else set()
+        ref_lods = set(json.loads(proj.ref_lod_names or "[]"))
         for lvl, mesh in szb.lod_meshes(final).items():
             if mesh is not None and (mesh.name in ref_lods or mesh != final.data):
                 problems.append(f"LOD {lvl} : ancienne géométrie ou maillage inattendu ({mesh.name}).")
     return problems
+
+
+def apply_names(proj):
+    """Renomme l'armature et le drawable selon les noms de sortie choisis. Retourne les changements."""
+    changes = []
+    for obj, wanted in ((proj.ref_root, proj.output_name.strip()), (proj.ref_drawable, proj.drawable_name.strip())):
+        if obj is not None and wanted and strip_suffix(obj.name) != wanted:
+            old = obj.name
+            obj.name = wanted
+            changes.append(f"{old} → {obj.name}")
+    return changes
 
 
 # ---------------------------------------------------------------------------
@@ -254,19 +224,19 @@ def run_checks(context, proj):
         add("ERROR", "Export", "Le binaire natif exige PyMateria dans Sollumz (Windows).", "Exportez en CodeWalker XML.")
     if proj.export_dir.startswith("//") and not bpy.data.filepath:
         add("ERROR", "Export", "Dossier relatif alors que le .blend n'est pas enregistré.", "Enregistrez le fichier.")
-    root, drawable, final = proj.export_root, proj.export_drawable, proj.final_obj
+    root, drawable, final = proj.ref_root, proj.ref_drawable, proj.final_obj
     if root is None:
-        add("ERROR", "Structure", "Aucun modèle d'export.", "Cliquez « Préparer le modèle d'export ».")
+        add("ERROR", "Structure", "Références Teef non chargées.", "Cliquez « Charger les références Teef ».")
         return out
     if strip_suffix(root.name) != proj.output_name.strip():
-        add("ERROR", "Noms", f"L'armature d'export s'appelle {root.name} au lieu de {proj.output_name}.",
-            "Préparez de nouveau le modèle d'export.", root.name)
+        add("WARNING", "Noms", f"L'armature s'appelle {root.name} : elle sera renommée {proj.output_name} à l'export.",
+            "", root.name)
     if drawable is not None and strip_suffix(drawable.name) != proj.drawable_name.strip():
-        add("ERROR", "Noms", f"Le drawable s'appelle {drawable.name} au lieu de {proj.drawable_name}.",
-            "Un autre objet porte ce nom ? Renommez-le puis préparez de nouveau.", drawable.name)
-    if not final_in_export(proj):
-        add("ERROR", "Structure", "Le bijou n'est pas encore dans le modèle d'export.",
-            "Cliquez « Remplacer le mesh de référence par mon bijou ».")
+        add("WARNING", "Noms", f"Le drawable s'appelle {drawable.name} : il sera renommé {proj.drawable_name} à l'export.",
+            "", drawable.name)
+    if not final_placed(proj):
+        add("ERROR", "Structure", "mio_chain n'est pas encore à la place de SKEL_ROOT.",
+            "Cliquez « Rigger sur SKEL_Spine3 » (étape 7) ou « Placer mio_chain dans la structure ».")
     else:
         if proj.replaced_signature != rigging.final_signature(proj):
             add("ERROR", "Structure", "Les composants ont changé depuis le remplacement.", "Refaites les étapes 7 et 8.")
@@ -318,8 +288,6 @@ def run_checks(context, proj):
     for obj in included:
         if obj.get(TAG_PREVIEW) or obj.get(TAG_DISPLAY) or obj.type in {"CAMERA", "LIGHT"}:
             add("ERROR", "Exclusion", f"{obj.name} (présentation) est dans l'export.", "", obj.name)
-        if obj.get(TAG_REFERENCE):
-            add("ERROR", "Exclusion", f"{obj.name} appartient aux références Teef.", "", obj.name)
         if proj.preview_scene is not None and proj.preview_scene in obj.users_scene:
             add("ERROR", "Exclusion", f"{obj.name} est aussi dans la scène d'aperçu.", "", obj.name)
     if proj.preview_scene is not None:
@@ -453,6 +421,10 @@ def verify_outputs(proj, files, directory):
 
 
 def do_export(context, proj):
+    szb.require()                 # message clair si Sollumz est absent ou désactivé
+    apply_names(proj)
+    if final_placed(proj):
+        apply_lods(proj)
     items = run_checks(context, proj)
     store_report(proj, items)
     blocking = [i for i in items if i[0] == "ERROR"]
@@ -466,7 +438,7 @@ def do_export(context, proj):
     if context.mode != "OBJECT":
         bpy.ops.object.mode_set(mode="OBJECT")
     try:
-        res = szb.export_assets(context, project_scene(context), proj.export_root, directory, formats, versions)
+        res = szb.export_assets(context, project_scene(context), proj.ref_root, directory, formats, versions)
     except RuntimeError as exc:
         raise McsError(f"L'export Sollumz a échoué : {exc}") from exc
     after = _snapshot(directory)
@@ -492,10 +464,11 @@ def do_export(context, proj):
 # Opérateurs
 # ---------------------------------------------------------------------------
 
-class MIO_OT_export_prepare(bpy.types.Operator):
-    bl_idname = "mio_chain.export_prepare"
-    bl_label = "Préparer le modèle d'export"
-    bl_description = "Copie la structure Teef importée (armature > drawable > mesh) pour l'export, sous vos noms"
+class MIO_OT_export_place(bpy.types.Operator):
+    bl_idname = "mio_chain.export_place"
+    bl_label = "Placer mio_chain dans la structure"
+    bl_description = ("Met mio_chain à la place du mesh de référence SKEL_ROOT sous teef_012_u (même parent, "
+                      "type Sollumz, skinning, LOD), vérifie, puis retire SKEL_ROOT")
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -503,33 +476,13 @@ class MIO_OT_export_prepare(bpy.types.Operator):
         if context.mode != "OBJECT":
             bpy.ops.object.mode_set(mode="OBJECT")
         try:
-            root, drawable, model = prepare_model(context, proj)
+            removed = place_final(context, proj)
         except McsError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        self.report({"INFO"}, f"Modèle d'export : {root.name} > {drawable.name} > {model.name} (mesh de référence à remplacer).")
-        return {"FINISHED"}
-
-
-class MIO_OT_export_replace(bpy.types.Operator):
-    bl_idname = "mio_chain.export_replace"
-    bl_label = "Remplacer le mesh de référence par mon bijou"
-    bl_description = ("Place le mesh final à la place du mesh de référence (même parent, type Sollumz, skinning, "
-                      "LOD), vérifie la structure, puis retire le mesh de référence de la copie d'export")
-    bl_options = {"REGISTER", "UNDO"}
-
-    def execute(self, context):
-        proj = get_project(context)
-        if context.mode != "OBJECT":
-            bpy.ops.object.mode_set(mode="OBJECT")
-        try:
-            removed = replace_reference(context, proj)
-        except McsError as exc:
-            self.report({"ERROR"}, str(exc))
-            return {"CANCELLED"}
-        lods = ", ".join(exported_lods(proj.final_obj))
-        self.report({"INFO"}, f"{proj.final_obj.name} placé sous {proj.export_drawable.name}"
-                              + (f", {removed} retiré" if removed else "") + f". LOD : {lods}.")
+        self.report({"INFO"}, f"{proj.final_obj.name} en place sous {proj.ref_drawable.name}"
+                              + (f", {removed} retiré" if removed else " (LOD réappliqués)")
+                              + f". LOD : {', '.join(exported_lods(proj.final_obj))}.")
         return {"FINISHED"}
 
 
@@ -584,4 +537,4 @@ class MIO_OT_open_folder(bpy.types.Operator):
         return {"FINISHED"}
 
 
-CLASSES = (MIO_OT_export_prepare, MIO_OT_export_replace, MIO_OT_export_check, MIO_OT_export, MIO_OT_open_folder)
+CLASSES = (MIO_OT_export_place, MIO_OT_export_check, MIO_OT_export, MIO_OT_open_folder)

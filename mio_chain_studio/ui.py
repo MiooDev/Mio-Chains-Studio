@@ -33,10 +33,22 @@ INSTRUCTIONS = {
     "4": "Réglez les paramètres du matériau actif et gérez vos presets (argent, or, diamant, glow…).",
     "5": "Crée Color 1 (#FF8000, alpha 1) et Color 2 (#000000, alpha 0) en Face Corner / Byte Color.",
     "6": "Peignez vous-même les zones de glow dans Color 1. Rien n'est rempli automatiquement.",
-    "7": "Crée une copie unique du bijou, pondérée à 100 % sur SKEL_Spine3 et liée au squelette masculin.",
-    "8": "Chargez les références, préparez le modèle, remplacez le mesh de référence, vérifiez puis exportez.",
+    "7": "Crée mio_chain (copie unique du bijou, 100 % sur SKEL_Spine3) et le met à la place de SKEL_ROOT.",
+    "8": "Structure teef_000_u > teef_012_u > mio_chain : noms, LOD, vérification puis export Sollumz.",
     "A": "Section séparée : votre display, une copie indépendante du bijou, la caméra et le rendu.",
 }
+
+
+def draw_structure(layout, proj):
+    """Hiérarchie réelle : armature > drawable > mesh(es), comme dans l'Outliner."""
+    root, drawable = proj.ref_root, proj.ref_drawable
+    box = layout.box()
+    col = box.column(align=True)
+    col.label(text=f"{root.name}  ({len(root.data.bones)} os)", icon="ARMATURE_DATA")
+    if drawable is not None:
+        col.label(text=f"    {drawable.name}", icon="EMPTY_AXIS")
+        for child in drawable.children:
+            col.label(text=f"        {child.name}", icon="MESH_DATA" if child == proj.final_obj else "OUTLINER_OB_MESH")
 
 
 class _Base:
@@ -343,22 +355,22 @@ class MIO_PT_step7(_Base, bpy.types.Panel):
         if proj.ref_root is None:
             layout.operator("mio_chain.teef_load", icon="IMPORT")
         else:
-            layout.label(text=f"Squelette : {proj.ref_root.name} ({len(proj.ref_root.data.bones)} os)", icon="ARMATURE_DATA")
+            draw_structure(layout, proj)
         r = layout.row()
         r.scale_y = 1.4
         r.operator("mio_chain.rig_spine3", icon="GROUP_VERTEX")
         final = proj.final_obj
         if final is not None:
-            from .export import final_in_export
-            where = (f"dans la structure Drawable « {final.parent.name} »" if final_in_export(proj)
-                     else "hors structure Drawable")
-            layout.label(text=f"Mesh final : {final.name} ({where})", icon="MESH_DATA")
+            from .export import final_placed
+            where = (f"sous {final.parent.name} (structure d'export)" if final_placed(proj)
+                     else "hors structure : cliquez « Placer mio_chain dans la structure »")
+            layout.label(text=f"{final.name} : {where}", icon="MESH_DATA")
             layout.label(text=f"{len(final.data.vertices)} sommets, {triangle_count(final.data)} triangles")
             layout.operator("mio_chain.weight_paint", icon="WPAINT_HLT")
 
 
 class MIO_PT_step8(_Base, bpy.types.Panel):
-    bl_label = "8. Modèle d'export et remplacement"
+    bl_label = "8. Structure d'export et export"
     bl_idname = "MIO_PT_step8"
     bl_options = {"DEFAULT_CLOSED"}
     step = "8"
@@ -372,25 +384,20 @@ class MIO_PT_step8(_Base, bpy.types.Panel):
         op = row.operator("mio_chain.teef_load", text="", icon="FILE_REFRESH")
         op.force = True
         if proj.ref_root is not None:
-            layout.label(text=f"Référence : {proj.ref_root.name} > "
-                              f"{proj.ref_drawable.name if proj.ref_drawable else '?'} > "
-                              f"{proj.ref_model.name if proj.ref_model else '?'}", icon="OUTLINER")
+            draw_structure(layout, proj)
         box = layout.box()
         box.prop(proj, "output_name")
         box.prop(proj, "drawable_name")
         box.prop(proj, "lod_mode")
-        box.operator("mio_chain.export_prepare", icon="DUPLICATE")
-        if proj.export_root is not None:
-            from .export import strip_suffix
-            box.label(text=f"Fichier : {strip_suffix(proj.export_root.name)}.ydd — drawable exporté : "
-                           f"{strip_suffix(proj.export_drawable.name) if proj.export_drawable else '?'}", icon="FILE")
-            box.prop(proj, "export_target")
-            from .export import exported_lods, final_in_export
-            if final_in_export(proj):
-                box.label(text="Bijou en place. LOD : " + ", ".join(exported_lods(proj.final_obj)), icon="CHECKMARK")
+        if proj.ref_root is not None:
+            from .export import exported_lods, final_placed
+            if final_placed(proj):
+                box.label(text="LOD exportés : " + ", ".join(exported_lods(proj.final_obj)), icon="CHECKMARK")
+            else:
+                box.prop(proj, "export_target")
         r = box.row()
         r.scale_y = 1.3
-        r.operator("mio_chain.export_replace", icon="UV_SYNC_SELECT")
+        r.operator("mio_chain.export_place", icon="UV_SYNC_SELECT")
         layout.operator("mio_chain.export_check", icon="VIEWZOOM")
         current = None
         for it in proj.report:

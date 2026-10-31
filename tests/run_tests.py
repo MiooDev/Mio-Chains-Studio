@@ -226,6 +226,11 @@ def main():
                                                      ("sollumz_high", "sollumz_medium", "sollumz_low")))
     check("Second chargement refusé sans « Recharger »", run("teef_load") != {"FINISHED"})
     n_ref = len(teef.reference_objects(p))
+    scene = bpy.data.scenes["Scene"]
+    check("Structure teef_000_u > teef_012_u > SKEL_ROOT dans la Scene Collection",
+          p.ref_root.name == "teef_000_u" and p.ref_drawable.name == "teef_012_u" and p.ref_drawable.parent == p.ref_root
+          and p.ref_root.name in scene.collection.objects and p.ref_drawable.name in scene.collection.objects
+          and p.ref_root.data.name.startswith("teef_000_u.skel"), (p.ref_root.name, p.ref_drawable.name))
     check("Recharger sans doublon", run("teef_load", force=True) == {"FINISHED"} and len(teef.reference_objects(p)) == n_ref)
     check("Nom d'origine rétabli après rechargement", p.ref_model.name == "SKEL_ROOT")
 
@@ -572,42 +577,42 @@ def main():
     n_final = sum(1 for o in bpy.data.objects if o.get("mcs_final"))
     run("rig_spine3")
     check("Clic répété : toujours un seul mesh final", sum(1 for o in bpy.data.objects if o.get("mcs_final")) == n_final == 1
-          and p.final_obj.name == "MCS_Bijou_Final")
+          and p.final_obj.name == "mio_chain")
     final = p.final_obj
     check("Weight Paint", run("weight_paint") == {"FINISHED"} and bpy.context.mode == "PAINT_WEIGHT")
     bpy.ops.object.mode_set(mode="OBJECT")
 
-    # 8. Export ----------------------------------------------------------------------------
-    print("\n[8] Modèle d'export")
+    # 8. Structure et export ------------------------------------------------------------
+    print("\n[8] Structure d'export")
+    root, drawable = p.ref_root, p.ref_drawable
+    check("Structure de la capture : teef_000_u > teef_012_u > mio_chain",
+          root.name == "teef_000_u" and drawable.name == "teef_012_u" and final.name == "mio_chain"
+          and final.parent == drawable and [c.name for c in drawable.children] == ["mio_chain"],
+          (root.name, drawable.name, [c.name for c in drawable.children]))
+    check("SKEL_ROOT (mesh) retiré, os SKEL_ROOT et armature intacts", "SKEL_ROOT" not in bpy.data.objects
+          and root.data.bones[0].name == "SKEL_ROOT" and len(root.data.bones) == 128)
+    check("mio_chain dans la Scene Collection, type Sollumz Drawable Model", final.name in scene.collection.objects
+          and final.sollum_type == szb.MODEL)
+    mods = [m for m in final.modifiers if m.type == "ARMATURE"]
+    check("mio_chain lié à l'armature teef_000_u", len(mods) == 1 and mods[0].object == root)
+    lods = szb.lod_meshes(final)
+    check("LOD : High = mio_chain, Medium et Low vides", lods["sollumz_high"] == final.data and lods["sollumz_medium"] is None
+          and lods["sollumz_low"] is None)
+    ref_lods = set(json.loads(p.ref_lod_names))
+    check("Aucune ancienne géométrie dans les LOD", ref_lods and not ({m.name for m in lods.values() if m} & ref_lods), ref_lods)
     final_world = final.matrix_world.copy()
-    check("Préparer le modèle d'export", run("export_prepare") == {"FINISHED"})
-    er, ed = p.export_root, p.export_drawable
-    target = p.export_target
-    check("Copie d'export : armature > drawable > mesh de référence", er.type == "ARMATURE" and er.name == "teef_000_u"
-          and ed.parent == er and exp.strip_suffix(ed.name) == "teef_000_u" and target.parent == ed and target.type == "MESH",
-          (er.name, ed.name, target.name))
-    target_name = target.name
-    check("Armature d'export : mêmes os (128, SKEL_ROOT, SKEL_Spine3)", er.data == p.ref_root.data and len(er.data.bones) == 128)
-    p.export_target = None
-    p.export_target = target
-    check("Mesh cible identifié dans la nouvelle hiérarchie (pas par nom)", p.export_target == target and target != p.ref_model)
-    ref_lods = {k: m.name for k, m in szb.lod_meshes(p.ref_model).items() if m}
-    check("Remplacer le mesh de référence par mon bijou", run("export_replace") == {"FINISHED"})
-    check("Mesh final sous le drawable d'export", final.parent == ed and final.sollum_type == szb.MODEL)
+    check("Placer à nouveau : LOD réappliqués, pas de doublon", run("export_place") == {"FINISHED"}
+          and [c.name for c in drawable.children] == ["mio_chain"])
+    n_ref = len(teef.reference_objects(p))
+    check("Recharger les références : mio_chain replacé dans la nouvelle structure",
+          run("teef_load", force=True) == {"FINISHED"} and p.final_obj.parent == p.ref_drawable
+          and p.ref_root.name == "teef_000_u" and p.ref_drawable.name == "teef_012_u"
+          and [c.name for c in p.ref_drawable.children] == ["mio_chain"] and len(teef.reference_objects(p)) == n_ref
+          and "SKEL_ROOT" not in bpy.data.objects and p.ref_root.data.name == "teef_000_u.skel",
+          ([o.name for o in teef.reference_objects(p)], p.ref_root.data.name))
+    root, drawable = p.ref_root, p.ref_drawable
     check("Position monde conservée (pas de double transformation)",
           max(abs(a - b) for ra, rb in zip(final.matrix_world, final_world) for a, b in zip(ra, rb)) < 1e-6)
-    lods = szb.lod_meshes(final)
-    check("LOD : High = bijou, Medium et Low vides", lods["sollumz_high"] == final.data and lods["sollumz_medium"] is None
-          and lods["sollumz_low"] is None)
-    check("Mesh de référence retiré de la copie seulement", target_name not in bpy.data.objects
-          and p.ref_model.name == "SKEL_ROOT")
-    _, models = teef.find_structure(er)
-    check("Un seul mesh sous le drawable", models == [final])
-    check("Références intactes (SKEL_ROOT os et mesh, LOD)", p.ref_model.name == "SKEL_ROOT" and "SKEL_ROOT" in er.data.bones
-          and {k: m.name for k, m in szb.lod_meshes(p.ref_model).items() if m} == ref_lods)
-    mods = [m for m in final.modifiers if m.type == "ARMATURE"]
-    check("Liaison à l'armature d'export", len(mods) == 1 and mods[0].object == er)
-    check("Remplacement répété refusé proprement", run("export_replace") != {"FINISHED"} and final.parent == ed)
     run("export_check")
     errors = [i.message for i in p.report if i.severity == "ERROR"]
     check("Vérification avant export : aucune erreur bloquante", not errors, errors)
@@ -615,27 +620,22 @@ def main():
     check("Exporter avec Sollumz", run("export") == {"FINISHED"} and p.last_export_ok, json.loads(p.last_export or "{}").get("errors"))
     xml_path = os.path.join(p.export_dir, "teef_000_u.ydd.xml")
     xml = open(xml_path, encoding="utf-8").read() if os.path.isfile(xml_path) else ""
-    check("YDD : drawable teef_000_u (pas teef_012_u)", "<Name>teef_000_u</Name>" in xml and "teef_012_u" not in xml)
+    check("YDD teef_000_u avec drawable teef_012_u", "<Name>teef_012_u</Name>" in xml)
     check("YDD : LOD High seulement", "DrawableModelsHigh" in xml and "DrawableModelsMedium" not in xml and "DrawableModelsLow" not in xml)
-    check("YDD : 100 % des sommets sur l'os 38", any("100 % sur l'os 38" in line or "à 100 %" in line
-                                                     for line in json.loads(p.last_export)["lines"]))
+    check("YDD : 100 % des sommets sur l'os 38", any("à 100 % sur l'os 38" in line for line in json.loads(p.last_export)["lines"]))
     check("YDD : Bump et Spec DDS intégrés", os.path.isfile(os.path.join(p.export_dir, "teef_000_u", "teef_normal_001.dds"))
           and os.path.isfile(os.path.join(p.export_dir, "teef_000_u", "teef_spec_000.dds")))
     check("YDD : ancienne chaîne absente", xml.count("<VertexBuffer>") >= 1 and "teef_diff_012_a_uni" not in xml)
     check("YDD : Colour0 255 128 0 255 et glow 255 186 255 255", "255 128 0 255" in xml and "255 186 255 255" in xml)
     check("Statut 8 terminé", status.step8(bpy.context, p)[0] == "Terminé", status.step8(bpy.context, p)[1])
     p.lod_mode = "DUPLICATE"
-    run("export_prepare")
-    check("Nouvelle préparation : bijou ressorti, pas supprimé", final.name in bpy.data.objects and final.parent is None)
-    run("export_replace")
     run("export")
     xml = open(xml_path, encoding="utf-8").read()
     check("LOD High copié en Medium et Low (affiché comme non optimisé)", "DrawableModelsMedium" in xml and "DrawableModelsLow" in xml
           and "non optimisée" in " ".join(i.message for i in p.report))
     p.lod_mode = "HIGH_ONLY"
-    run("export_prepare")
-    run("export_replace")
     run("export")
+    check("Retour au High seul", "DrawableModelsMedium" not in open(xml_path, encoding="utf-8").read())
 
     # Display -----------------------------------------------------------------------------
     print("\n[A] Display")
@@ -677,8 +677,7 @@ def main():
 
     # Sauvegarde et réouverture -----------------------------------------------------------
     print("\n[S] Sauvegarde et réouverture")
-    names = {k: getattr(p, k).name for k in ("ref_root", "ref_model", "final_obj", "export_root", "export_drawable",
-                                             "preview_scene")}
+    names = {k: getattr(p, k).name for k in ("ref_root", "ref_drawable", "final_obj", "preview_scene")}
     n_parts = len(p.parts)
     bpy.ops.wm.save_mainfile()
     bpy.ops.wm.open_mainfile(filepath=os.path.join(WORK, "projet.blend"))

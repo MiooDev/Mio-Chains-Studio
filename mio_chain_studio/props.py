@@ -24,9 +24,9 @@ def _poll_camera(self, obj):
 
 
 def _poll_export_mesh(self, obj):
-    """Seuls les maillages de la copie d'export sont proposés comme mesh à remplacer."""
-    root = self.export_root
-    return obj.type == "MESH" and root is not None and obj in root.children_recursive
+    """Seuls les maillages de référence de la structure Teef sont proposés comme mesh à remplacer."""
+    root = self.ref_root
+    return obj.type == "MESH" and root is not None and obj in root.children_recursive and obj != self.final_obj
 
 
 def _shader_search(self, context, edit_text):
@@ -149,16 +149,15 @@ class MCS_Project(bpy.types.PropertyGroup):
     ref_root: PointerProperty(type=bpy.types.Object)
     ref_drawable: PointerProperty(type=bpy.types.Object)
     ref_model: PointerProperty(type=bpy.types.Object)
+    ref_lod_names: StringProperty(options={"HIDDEN"}, description="Maillages LOD de référence (JSON)")
 
     # --- 8. Export ----------------------------------------------------------------------
-    export_root: PointerProperty(type=bpy.types.Object)
-    export_drawable: PointerProperty(type=bpy.types.Object)
     export_target: PointerProperty(type=bpy.types.Object, poll=_poll_export_mesh, name="Mesh à remplacer",
                                    description="Mesh de référence de la copie d'export (affiché « SKEL_ROOT » après import)")
     output_name: StringProperty(name="Nom du fichier YDD", default="teef_000_u",
-                                description="Nom du fichier exporté (sans extension)")
-    drawable_name: StringProperty(name="Nom du drawable", default="teef_000_u",
-                                  description="Nom interne du drawable (la référence utilise teef_012_u)")
+                                description="Nom de l'armature et du fichier exporté (sans extension)")
+    drawable_name: StringProperty(name="Nom du drawable", default="teef_012_u",
+                                  description="Nom du drawable sous l'armature (teef_012_u comme dans votre structure)")
     lod_mode: EnumProperty(name="LOD", default="HIGH_ONLY", items=[
         ("HIGH_ONLY", "High uniquement", "Medium et Low vides : rien de l'ancienne chaîne n'y reste"),
         ("DUPLICATE", "High copié en Medium et Low", "Même maillage sur les trois niveaux (non optimisé)"),

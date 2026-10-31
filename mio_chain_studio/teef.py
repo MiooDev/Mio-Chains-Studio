@@ -4,6 +4,7 @@ Le squelette masculin vient de mp_m_freemode_01.yft.xml, passé à Sollumz comme
 (mode « Saved ») lors de l'import de teef_000_u.ydd.xml. Aucun squelette n'est généré par l'addon.
 """
 
+import json
 import os
 import re
 import xml.etree.ElementTree as ET
@@ -19,7 +20,6 @@ from .utils import (
     abspath,
     get_project,
     link_only_to,
-    project_collection,
     project_scene,
     remove_owned_object,
     tag,
@@ -162,21 +162,31 @@ def find_structure(root):
 
 
 def load_references(context, proj, force=False):
+    """Importe la structure Teef dans la Scene Collection et y place mio_chain s'il existe.
+
+    Résultat : teef_000_u (armature, 128 os) > teef_012_u (drawable) > mio_chain (ou SKEL_ROOT tant que
+    mio_chain n'est pas construit). Retourne (racine, drawable, nom du mesh placé ou None).
+    """
+    from . import export
     szb.require()
+    if proj.ref_root is not None and not force:
+        if proj.final_obj is not None and not export.final_placed(proj):
+            export.place_final(context, proj)
+            return proj.ref_root, proj.ref_drawable, proj.final_obj.name
+        raise McsError("Les références Teef sont déjà chargées. Utilisez « Recharger » pour les remplacer.")
     folder = teef_dir(context)
     ok, info, issues = check_folder(folder)
     if not ok:
         raise McsError("Dossier Teef invalide : " + " ".join(m for s, m, f in issues if s == "ERROR"))
-    if proj.ref_root is not None and not force:
-        raise McsError("Les références Teef sont déjà chargées. Utilisez « Recharger » pour les remplacer.")
-    coll = project_collection(context, proj, "MCS_References_Teef", "references")
-    result, new = szb.import_ydd_with_external_skeleton(context, path_of("ydd", folder), path_of("yft", folder), coll)
+    scene = project_scene(context)
+    result, new = szb.import_ydd_with_external_skeleton(context, path_of("ydd", folder), path_of("yft", folder),
+                                                        scene.collection)
     roots = [o for o in new if o.type == "ARMATURE" and o.sollum_type == szb.DWD]
     if "FINISHED" not in result or len(roots) != 1:
         for o in new:
             bpy.data.objects.remove(o, do_unlink=True)
         raise McsError("Sollumz n'a pas produit la structure attendue (armature Drawable Dictionary). "
-                       "Consultez le journal Info de Blender. Les références précédentes sont conservées.")
+                       "Consultez le journal Info de Blender. La structure précédente est conservée.")
     root = roots[0]
     problems = [m for s, m, f in verify_armature(root) if s == "ERROR"]
     drawable, models = find_structure(root)
@@ -186,26 +196,38 @@ def load_references(context, proj, force=False):
         for o in new:
             bpy.data.objects.remove(o, do_unlink=True)
         raise McsError("Références importées non conformes : " + " ; ".join(problems))
-    # Remplacement : l'ancien jeu de références n'est retiré qu'après la réussite du nouvel import.
+    # Remplacement : l'ancienne structure n'est retirée qu'après la réussite du nouvel import ;
+    # mio_chain en est d'abord sorti (position monde conservée).
+    export.release_final(proj)
+    old_skeletons = [o.data for o in reference_objects(proj) if o.type == "ARMATURE"]
     for old in reference_objects(proj):
         remove_owned_object(old, proj, marker=TAG_REFERENCE)
+    for data in old_skeletons:
+        if data.users == 0:
+            bpy.data.armatures.remove(data)     # données de l'ancien squelette importé, devenues inutilisées
     for o in new:
-        link_only_to(o, coll)
+        link_only_to(o, scene.collection)
         tag(o, proj, role="reference", generated=False, **{TAG_REFERENCE: 1})
         base = re.sub(r"\.\d{3}$", "", o.name)
         if base != o.name and base not in bpy.data.objects:
-            o.name = base          # nom d'origine (ex. SKEL_ROOT) une fois l'ancien jeu retiré
-    root.name = "REF_" + root.name
-    drawable.name = "REF_" + drawable.name
+            o.name = base          # nom d'origine (ex. SKEL_ROOT) une fois l'ancienne structure retirée
+    base = re.sub(r"\.\d{3}$", "", root.data.name)
+    if base != root.data.name and base not in bpy.data.armatures:
+        root.data.name = base
     proj.ref_root, proj.ref_drawable, proj.ref_model = root, drawable, models[0]
+    proj.ref_lod_names = json.dumps(sorted({m.name for m in szb.lod_meshes(models[0]).values() if m}))
+    proj.export_target = None
+    proj.replaced_signature = ""
     proj.teef_loaded_dir = folder
-    # Le mesh final (étape 7) hors structure d'export reste lié au squelette rechargé.
-    final = proj.final_obj
-    if final is not None and final.parent is None:
-        for mod in final.modifiers:
-            if mod.type == "ARMATURE" and mod.object is None:
-                mod.object = root
-    return root, drawable, models
+    export.apply_names(proj)
+    placed = None
+    if proj.final_obj is not None:
+        rigging_mod = next((m for m in proj.final_obj.modifiers if m.type == "ARMATURE"), None)
+        if rigging_mod is not None:
+            rigging_mod.object = root
+        export.place_final(context, proj)
+        placed = proj.final_obj.name
+    return root, drawable, placed
 
 
 # ---------------------------------------------------------------------------
@@ -236,13 +258,18 @@ class MIO_OT_teef_load(bpy.types.Operator):
 
     def execute(self, context):
         proj = get_project(context)
+        if context.mode != "OBJECT":
+            bpy.ops.object.mode_set(mode="OBJECT")
         try:
-            root, drawable, models = load_references(context, proj, self.force)
+            root, drawable, placed = load_references(context, proj, self.force)
         except McsError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        self.report({"INFO"}, f"Références chargées : {root.name} ({len(root.data.bones)} os) > {drawable.name} > "
-                              f"{', '.join(m.name for m in models)}.")
+        child = placed or ", ".join(c.name for c in drawable.children)
+        msg = f"Structure : {root.name} ({len(root.data.bones)} os) > {drawable.name} > {child}."
+        if not placed:
+            msg += " Cliquez « Rigger sur SKEL_Spine3 » pour y mettre mio_chain."
+        self.report({"INFO"}, msg)
         return {"FINISHED"}
 
 

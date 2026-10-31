@@ -22,6 +22,7 @@ from .utils import (
 
 BONE = "SKEL_Spine3"
 MOD_NAME = "MCS_Armature"
+FINAL_NAME = "mio_chain"
 
 
 def require_armature(proj):
@@ -87,8 +88,8 @@ def build_final(context, proj):
                 if data.users == 0:
                     bpy.data.meshes.remove(data)
         raise
-    final.name = "MCS_Bijou_Final"
-    final.data.name = "MCS_Bijou_Final"
+    final.name = FINAL_NAME
+    final.data.name = FINAL_NAME
     tag(final, proj, role="final", **{TAG_FINAL: 1})
     tag(final.data, proj, role="final")
     link_only_to(final, coll)
@@ -112,8 +113,8 @@ def build_final(context, proj):
         bpy.data.objects.remove(old)
         if data.users == 0:
             bpy.data.meshes.remove(data)
-    final.name = "MCS_Bijou_Final"
-    final.data.name = "MCS_Bijou_Final"
+    final.name = FINAL_NAME
+    final.data.name = FINAL_NAME
     proj.final_obj = final
     proj.final_signature = final_signature(proj)
     if removed:
@@ -189,7 +190,14 @@ class MIO_OT_rig_spine3(bpy.types.Operator):
         except McsError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        msg = (f"{final.name} : {len(final.data.vertices)} sommets à 100 % sur {BONE}, lié à {proj.ref_root.name}.")
+        from .export import place_final
+        try:
+            removed = place_final(context, proj)
+        except McsError as exc:
+            self.report({"ERROR"}, f"{final.name} créé mais non placé dans la structure : {exc}")
+            return {"FINISHED"}
+        msg = (f"{proj.ref_root.name} > {proj.ref_drawable.name} > {final.name} : {len(final.data.vertices)} sommets "
+               f"à 100 % sur {BONE}" + (f", {removed} retiré." if removed else "."))
         if notes:
             self.report({"WARNING"}, msg + " Remarques : " + " ; ".join(notes))
         else:

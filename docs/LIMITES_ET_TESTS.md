@@ -1,4 +1,4 @@
-# Vérifications, limites connues et tests restants (version 0.2.4)
+# Vérifications, limites connues et tests restants (version 0.3.0)
 
 ## Environnement des tests réellement exécutés
 
@@ -9,7 +9,7 @@
 - **Copie testée** : l'addon **installé depuis le ZIP** (`extensions.package_install_files`).
 - **Script** : `tests/run_tests.py`.
 
-**Résultat : 139/139 vérifications réussies.**
+**Résultat : 141/141 vérifications réussies.**
 
 | Point demandé | Vérification exécutée |
 |---|---|
@@ -27,11 +27,11 @@
 | Glow | Color 1 actif et mode Vertex Paint ; la peinture `#FFBAFF` est conservée jusqu'à l'export |
 | Poids 1 sur SKEL_Spine3 | Tous les sommets du mesh final : un seul groupe `SKEL_Spine3` à 1,0 ; groupe résiduel retiré de la copie (pas de la source) |
 | Un seul mesh final et sa liaison | Un seul objet après deux clics ; modificateur Armature vers le squelette chargé (128 os, SKEL_Spine3 index 38, tag 24818) |
-| Bon mesh de référence remplacé | Mesh repéré dans la copie d'export, pas l'original `SKEL_ROOT` ; références (os, mesh, LOD) intactes |
+| Structure de votre Outliner (0.3.0) | `teef_000_u` (128 os, données `teef_000_u.skel`) > `teef_012_u` > `mio_chain` dans la Scene Collection ; le mesh `SKEL_ROOT` est retiré, l'os `SKEL_ROOT` et l'armature restent intacts ; rechargement : `mio_chain` replacé dans la nouvelle structure, sans doublon |
 | Placement du bijou | Position monde identique avant et après le changement de parent |
 | Aucune ancienne géométrie dans les LOD | High = bijou, Medium et Low vides ; mode copie : High recopié en Medium et Low ; fichier exporté : `DrawableModelsHigh` seul (ou High, Medium, Low), aucune trace de `teef_diff_012_a_uni` |
 | Export relu | `teef_000_u.ydd.xml` : drawable `teef_000_u` ; 100 % des sommets à `0 0 255 0` / `0 0 38 0` comme la référence vanilla ; squelette exclu ; DDS Bump et Spec intégrés ; Colour0 255 128 0 255 et zones 255 186 255 255 |
-| Sauvegarde et réouverture | Références, mesh final, copie d'export, composants, réglages et presets conservés ; statut 8 conservé ; actualisation sans doublon |
+| Sauvegarde et réouverture | Structure Teef, mio_chain, composants, réglages et presets conservés ; statut 8 conservé ; actualisation sans doublon |
 | Exclusion du display | Display chargé dans une scène séparée ; aucune erreur d'exclusion ; aucun objet du display dans le YDD |
 | Dépendances | Dossier Teef incomplet ou absent refusé ; Sollumz désactivé : export refusé et panneaux sans erreur |
 | Interface | Le code de dessin de tous les panneaux a été exécuté (noms de propriétés et d'opérateurs validés), y compris sans Sollumz |
@@ -49,7 +49,7 @@
 
 ## Limites connues
 
-- **Mesh final** : il est construit à partir des composants. S'ils changent, l'étape 7 repasse en « périmé » ; relancez-la, puis refaites le remplacement de l'étape 8.
+- **mio_chain** : il est construit à partir des composants. S'ils changent, l'étape 7 repasse en « périmé » ; relancez-la : le nouveau mio_chain reprend sa place sous teef_012_u.
 - **DiffuseSampler non intégré** : la texture doit être fournie dans un YTD. L'addon le signale mais ne crée pas ce YTD.
 - **LOD Medium et Low** : aucune simplification automatique. Le mode « copie » recopie le High tel quel (non optimisé).
 - **Seconde map UV de `ped_emissive.sps`** : `UVMap 1` est créée par Sollumz avec ses valeurs par défaut ; son rôle exact dans le shader n'est pas documenté ici.

@@ -155,10 +155,13 @@ def step7(context, proj):
         return STATUS_TODO, [("ERROR", "Squelette masculin non chargé.", "Cliquez « Charger les références Teef ».")]
     final = proj.final_obj
     if final is None:
-        return STATUS_TODO, [("INFO", "Mesh final non créé.", "Cliquez « Rigger sur SKEL_Spine3 ».")]
+        return STATUS_TODO, [("INFO", "mio_chain non créé.", "Cliquez « Rigger sur SKEL_Spine3 ».")]
+    if not export.final_placed(proj):
+        issues.append(("WARNING", "mio_chain n'est pas dans la structure teef_000_u > teef_012_u.",
+                       "Cliquez « Placer mio_chain dans la structure » (étape 8)."))
     state, fresh = rigging.final_state(proj)
     if not fresh:
-        issues.append(("WARNING", f"Mesh final {state}.", "Cliquez de nouveau « Rigger sur SKEL_Spine3 »."))
+        issues.append(("WARNING", f"mio_chain {state}.", "Cliquez de nouveau « Rigger sur SKEL_Spine3 »."))
     mod = next((m for m in final.modifiers if m.type == "ARMATURE"), None)
     for p in cached("final_verify", lambda: rigging.verify(proj, final, arm=mod.object if mod else None)):
         issues.append(("ERROR", p, ""))
@@ -167,11 +170,10 @@ def step7(context, proj):
 
 def step8(context, proj):
     if proj.ref_root is None:
-        return STATUS_TODO, [("INFO", "Références Teef non chargées.", "")]
-    if proj.export_root is None:
-        return STATUS_TODO, [("INFO", "Modèle d'export non préparé.", "")]
-    if not export.final_in_export(proj):
-        return STATUS_CHECK, [("WARNING", "Le mesh de référence n'est pas encore remplacé par votre bijou.", "")]
+        return STATUS_TODO, [("INFO", "Références Teef non chargées.", "Cliquez « Charger les références Teef ».")]
+    if not export.final_placed(proj):
+        return STATUS_CHECK, [("WARNING", "mio_chain n'est pas encore à la place de SKEL_ROOT.",
+                               "Cliquez « Rigger sur SKEL_Spine3 » (étape 7).")]
     issues = []
     if not proj.export_count:
         issues.append(("INFO", "Pas encore exporté.", ""))
@@ -205,7 +207,7 @@ STEPS = (
     ("5", "Color Attributes", step5),
     ("6", "Glow", step6),
     ("7", "Rigging sur SKEL_Spine3", step7),
-    ("8", "Modèle d'export et export", step8),
+    ("8", "Structure d'export et export", step8),
     ("A", "Aperçu sur mon display", step_display),
 )
 
