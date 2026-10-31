@@ -188,14 +188,12 @@ def step8(context, proj):
 
 def step_display(context, proj):
     if proj.preview_scene is None:
-        return STATUS_TODO, [("INFO", "Display non chargé (facultatif).", "")]
-    issues = [("WARNING", f"Ressource externe manquante — {m}", "") for m in json.loads(proj.display_missing or "[]")[:6]]
-    if proj.preview_marker is None:
-        issues.append(("ERROR", "Aucun repère de placement.", "Définissez le repère du bijou."))
+        return STATUS_TODO, [("INFO", "Facultatif : choisissez votre .blend puis « Charger le display ».", "")]
+    issues = [("INFO", f"Ressource manquante dans le display — {m}", "") for m in json.loads(proj.display_missing or "[]")[:4]]
     if not display.preview_objects(proj, "copy"):
-        issues.append(("ERROR", "Bijou non placé sur le display.", "Cliquez « Placer le bijou »."))
+        issues.append(("WARNING", "Bijou pas encore placé sur le display.", "Cliquez « Actualiser le bijou »."))
     elif proj.preview_signature != cached("prev_sig", lambda: display.preview_signature(proj)):
-        issues.append(("WARNING", "Aperçu périmé : le bijou a changé.", "Cliquez « Actualiser la copie »."))
+        issues.append(("WARNING", "Le bijou a changé depuis le placement.", "Cliquez « Actualiser le bijou »."))
     return (STATUS_DONE if _ok(issues) else STATUS_CHECK), issues
 
 

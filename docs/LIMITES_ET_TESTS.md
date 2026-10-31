@@ -1,4 +1,4 @@
-# Vérifications, limites connues et tests restants (version 0.3.0)
+# Vérifications, limites connues et tests restants (version 0.3.1)
 
 ## Environnement des tests réellement exécutés
 
@@ -9,7 +9,7 @@
 - **Copie testée** : l'addon **installé depuis le ZIP** (`extensions.package_install_files`).
 - **Script** : `tests/run_tests.py`.
 
-**Résultat : 141/141 vérifications réussies.**
+**Résultat : 145/145 vérifications réussies.**
 
 | Point demandé | Vérification exécutée |
 |---|---|
@@ -32,6 +32,7 @@
 | Aucune ancienne géométrie dans les LOD | High = bijou, Medium et Low vides ; mode copie : High recopié en Medium et Low ; fichier exporté : `DrawableModelsHigh` seul (ou High, Medium, Low), aucune trace de `teef_diff_012_a_uni` |
 | Export relu | `teef_000_u.ydd.xml` : drawable `teef_000_u` ; 100 % des sommets à `0 0 255 0` / `0 0 38 0` comme la référence vanilla ; squelette exclu ; DDS Bump et Spec intégrés ; Colour0 255 128 0 255 et zones 255 186 255 255 |
 | Sauvegarde et réouverture | Structure Teef, mio_chain, composants, réglages et presets conservés ; statut 8 conservé ; actualisation sans doublon |
+| Aperçu simplifié (0.3.1) | Chargement en un clic avec bijou posé automatiquement sur le vide du display ; « Déplacer le bijou » sélectionne le repère dans le display ; position mémorisée ; retour au projet ; rendu rapide |
 | Exclusion du display | Display chargé dans une scène séparée ; aucune erreur d'exclusion ; aucun objet du display dans le YDD |
 | Dépendances | Dossier Teef incomplet ou absent refusé ; Sollumz désactivé : export refusé et panneaux sans erreur |
 | Interface | Le code de dessin de tous les panneaux a été exécuté (noms de propriétés et d'opérateurs validés), y compris sans Sollumz |

@@ -444,53 +444,75 @@ class MIO_PT_display(_Base, bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         proj = get_project(context)
-        self.draw_status(context, proj)
+        st, issues = status.compute(context, proj, self.step)
+        layout.label(text=f"Statut : {st}", icon=STATUS_ICONS[st])
         row = layout.row(align=True)
-        row.prop(proj, "display_path", text="")
-        row.operator("mio_chain.display_analyse", text="", icon="VIEWZOOM")
-        layout.prop(proj, "display_mode", expand=True)
+        row.prop(proj, "display_path", text="Display")
+        if proj.preview_scene is None:
+            r = layout.row()
+            r.scale_y = 1.4
+            r.operator("mio_chain.display_load", text="1. Charger le display", icon="APPEND_BLEND")
+            draw_wrapped(layout, context, "Charge votre .blend dans une scène à part et y place une copie du bijou. "
+                                          "Rien de cette scène n'est exporté.", icon="INFO")
+            return
+        row.operator("mio_chain.display_load", text="", icon="FILE_REFRESH").force = True
+        col = layout.column(align=True)
+        col.scale_y = 1.3
+        col.operator("mio_chain.preview_move", text="2. Déplacer le bijou (G / R / S)", icon="OBJECT_ORIGIN")
+        col.operator("mio_chain.marker_save", icon="PINNED")
+        col.operator("mio_chain.preview_refresh", text="3. Actualiser le bijou", icon="FILE_REFRESH")
+        col.operator("mio_chain.view_camera", text="4. Voir par la caméra", icon="CAMERA_DATA")
+        row = layout.row(align=True)
+        row.scale_y = 1.3
+        row.operator("mio_chain.render", text="Rendu rapide", icon="RENDER_STILL").mode = "QUICK"
+        row.operator("mio_chain.render", text="Rendu final", icon="RENDER_RESULT").mode = "FINAL"
+        if context.scene != project_scene(context):
+            layout.operator("mio_chain.back_to_project", icon="LOOP_BACK")
+        for sev, msg, fix in issues:
+            if sev != "INFO" or "manquante" in msg:
+                draw_wrapped(layout, context, msg + (f" → {fix}" if fix else ""), icon=SEVERITY_ICONS[sev])
+
+
+class MIO_PT_display_options(_Base, bpy.types.Panel):
+    bl_label = "Options"
+    bl_parent_id = "MIO_PT_display"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        layout = self.layout
+        proj = get_project(context)
+        box = layout.box()
+        box.label(text="Chargement")
+        box.prop(proj, "display_mode", expand=True)
         if proj.display_mode == "SCENE":
-            layout.prop_search(proj, "display_scene_name", proj, "display_items", text="Scène")
+            row = box.row(align=True)
+            row.prop_search(proj, "display_scene_name", proj, "display_items", text="Scène")
+            row.operator("mio_chain.display_analyse", text="", icon="VIEWZOOM")
         else:
-            box = layout.box()
+            box.operator("mio_chain.display_analyse", icon="VIEWZOOM")
             for it in proj.display_items:
                 if it.kind in {"COLLECTION", "WORLD"}:
                     box.prop(it, "use", text=f"{'Collection' if it.kind == 'COLLECTION' else 'Monde'} : {it.name}")
-        row = layout.row(align=True)
-        row.operator("mio_chain.display_load", icon="APPEND_BLEND")
-        op = row.operator("mio_chain.display_load", text="Recharger", icon="FILE_REFRESH")
-        op.force = True
-        if proj.preview_scene is None:
-            return
         box = layout.box()
-        box.label(text="Repère", icon="EMPTY_ARROWS")
+        box.label(text="Placement")
         row = box.row(align=True)
-        row.operator("mio_chain.marker_set", text="Objet actif").source = "ACTIVE"
-        row.operator("mio_chain.marker_set", text="Curseur 3D").source = "CURSOR"
-        box.operator("mio_chain.marker_save", icon="FILE_TICK")
+        row.operator("mio_chain.marker_set", text="Repère sur l'objet actif").source = "ACTIVE"
+        row.operator("mio_chain.marker_set", text="Sur le curseur").source = "CURSOR"
         box.prop(proj, "preview_anchor")
-        box.prop(proj, "preview_loc")
-        box.prop(proj, "preview_rot")
+        box.prop(proj, "preview_loc", text="Décalage")
+        box.prop(proj, "preview_rot", text="Rotation")
         box.prop(proj, "preview_scale")
         box.prop(proj, "preview_keep_materials")
-        row = box.row(align=True)
-        row.scale_y = 1.2
-        row.operator("mio_chain.preview_refresh", text="Placer le bijou", icon="IMPORT")
-        row.operator("mio_chain.preview_refresh", text="Actualiser la copie", icon="FILE_REFRESH")
         box = layout.box()
+        box.label(text="Rendu")
         box.prop(proj, "render_camera")
         row = box.row(align=True)
         row.prop(proj, "render_res_x")
         row.prop(proj, "render_res_y")
         box.prop(proj, "render_percent")
         box.prop(proj, "render_dir")
-        box.prop(proj, "render_mode", expand=True)
-        if proj.render_mode == "QUICK":
-            box.prop(proj, "quick_samples")
-        row = box.row(align=True)
-        row.operator("mio_chain.view_camera", icon="CAMERA_DATA")
-        row.operator("mio_chain.render", icon="RENDER_STILL")
+        box.prop(proj, "quick_samples")
 
 
 CLASSES = (MIO_PT_main, MIO_PT_step1, MIO_PT_step2, MIO_PT_step3, MIO_PT_step4, MIO_PT_step5, MIO_PT_step6,
-           MIO_PT_step7, MIO_PT_step8, MIO_PT_display)
+           MIO_PT_step7, MIO_PT_step8, MIO_PT_display, MIO_PT_display_options)

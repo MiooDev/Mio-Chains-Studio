@@ -6,12 +6,12 @@ Addon Blender pour préparer **vos propres pendentifs et chaînes FiveM** avec *
 |---|---|
 | Blender | **5.2** (vérifié avec 5.2.3 LTS) |
 | Sollumz | **2.9.0** (dernière version publiée, vérifiée) avec sa dépendance `szio` |
-| Addon | 0.3.0 |
+| Addon | 0.3.1 |
 
 ## Installation
 
 1. Installez et activez **Sollumz 2.9.0** et ses dépendances (préférences de Sollumz → *Install dependencies*).
-2. Blender → **Édition → Préférences → Extensions** → menu **⌄** → **Installer depuis le disque…** → `dist/mio_chain_studio-0.3.0.zip`.
+2. Blender → **Édition → Préférences → Extensions** → menu **⌄** → **Installer depuis le disque…** → `dist/mio_chain_studio-0.3.1.zip`.
 3. Extrayez **Teef.zip** en conservant son arborescence :
    ```
    Teef/
@@ -126,13 +126,15 @@ Si `mio_chain` existe déjà quand vous chargez (ou rechargez) les références,
 Un export Blender réussi **ne valide pas** le bijou dans FiveM : testez-le en jeu.
 
 ## Aperçu sur mon display
-Section séparée :
-- choix et chargement de votre `.blend`, dans une scène à part (éclairage, matériaux et caméras préservés) ;
-- **repère réglable**, enregistrable pour les projets suivants ;
-- copie indépendante du bijou, **actualisable** sans doublon ;
-- **Voir par la caméra** et **Lancer le rendu** (aperçu rapide ou final).
+Section séparée et facultative, en quatre gestes :
+1. Choisissez votre `.blend` puis **Charger le display**. En un clic :
+   - le display est ajouté dans une scène à part, avec son éclairage, ses matériaux, ses caméras et ses réglages de rendu ;
+   - une **copie** du bijou y est posée sur un repère : la position mémorisée pour ce display, sinon un vide dont le nom contient « repère », « bijou », « collier »…, sinon le curseur 3D.
+2. **Déplacer le bijou (G / R / S)** ouvre le display et sélectionne le repère qui porte le bijou. **Mémoriser cette position** la garde pour les prochains projets.
+3. **Actualiser le bijou** après une modification, sans recharger le display ni créer de doublon.
+4. **Voir par la caméra**, puis **Rendu rapide** ou **Rendu final**. **Revenir au projet** vous ramène à votre scène.
 
-Le display, ses lumières, ses caméras et les copies d'aperçu sont exclus de l'export.
+Caméra, résolution, dossier des rendus, mode de chargement et décalages sont dans le sous-panneau **Options**, fermé par défaut. Le display, ses lumières, ses caméras et les copies d'aperçu sont exclus de l'export.
 
 ## Code
 

@@ -644,14 +644,21 @@ def main():
     p.display_path = os.path.join(WORK, "absent.blend")
     check("Display manquant : erreur", run("display_load") != {"FINISHED"})
     p.display_path = display_path
-    run("display_analyse")
-    check("Charger le display", run("display_load") == {"FINISHED"} and p.preview_scene is not None)
+    check("1. Charger le display (un seul clic)", run("display_load") == {"FINISHED"} and p.preview_scene is not None)
     ps = p.preview_scene
-    check("Caméra et réglages du display repris", p.render_camera and ps.cycles.samples == 128)
     mk = [o for o in ps.objects if o.name.startswith("Repere_Cou")][0]
+    check("Bijou placé automatiquement sur le vide « Repere_Cou » du display",
+          len(display.preview_objects(p, "copy")) == len(part_meshes(p))
+          and (p.preview_marker.matrix_world.translation - mk.matrix_world.translation).length < 1e-6)
+    check("Caméra et réglages du display repris", p.render_camera and ps.cycles.samples == 128)
+    check("2. Déplacer le bijou : repère sélectionné dans le display", run("preview_move") == {"FINISHED"}
+          and bpy.context.window.scene == ps and ps.view_layers[0].objects.active == p.preview_marker)
+    p.preview_marker.location.x += 0.1
+    check("Mémoriser cette position", run("marker_save") == {"FINISHED"})
+    check("Revenir au projet", run("back_to_project") == {"FINISHED"} and bpy.context.window.scene.name == "Scene")
     with bpy.context.temp_override(scene=ps, view_layer=ps.view_layers[0], active_object=mk):
-        check("Repère réglable (objet actif)", run("marker_set", source="ACTIVE") == {"FINISHED"})
-    check("Placer le bijou", run("preview_refresh") == {"FINISHED"})
+        check("Option : repère sur l'objet actif", run("marker_set", source="ACTIVE") == {"FINISHED"})
+    check("3. Actualiser le bijou", run("preview_refresh") == {"FINISHED"})
     n = len(display.preview_objects(p, "copy"))
     n_mesh = len(bpy.data.meshes)
     run("preview_refresh")
@@ -663,7 +670,7 @@ def main():
           and not set(copy.data.materials) & set(src.data.materials))
     p.render_res_x, p.render_res_y, p.quick_samples = 64, 48, 1
     p.render_dir = os.path.join(WORK, "rendus")
-    check("Lancer un rendu", run("render") == {"FINISHED"} and any(f.endswith(".png") for f in os.listdir(p.render_dir)))
+    check("Rendu rapide", run("render", mode="QUICK") == {"FINISHED"} and any(f.endswith(".png") for f in os.listdir(p.render_dir)))
     check("Réglages du display restaurés", ps.cycles.samples == 128)
     run("export_check")
     excl = [i.message for i in p.report if i.category == "Exclusion" and i.severity == "ERROR"]

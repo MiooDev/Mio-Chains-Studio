@@ -116,11 +116,12 @@ def load(context, proj, force=False):
     path = _check_file(proj)
     if proj.preview_scene is not None:
         if not force:
-            raise McsError("Le display est déjà chargé. « Actualiser l'aperçu » met à jour le bijou sans recharger ; "
-                           "« Recharger le display » le recharge entièrement.")
+            raise McsError("Le display est déjà chargé : cliquez « Actualiser le bijou », ou « Recharger » "
+                           "pour tout recharger.")
         unload(proj)
-    if not proj.display_items:
-        analyse(proj)
+    scenes, collections, worlds = analyse(proj)         # toujours relire le fichier choisi
+    if proj.display_mode == "SCENE" and proj.display_scene_name not in scenes and scenes:
+        proj.display_scene_name = scenes[0]
     src_scene = project_scene(context)
     images_before, libs_before = set(bpy.data.images), set(bpy.data.libraries)
     objects_before = set(bpy.data.objects)
@@ -174,7 +175,26 @@ def load(context, proj, force=False):
     if saved and (proj.display_mode != "SCENE" or saved.get("scene") in (None, proj.display_scene_name)):
         m = saved["matrix"]
         set_marker(proj, Matrix([m[0:4], m[4:8], m[8:12], m[12:16]]))
-    return scene, missing, bool(saved)
+        origin = "position mémorisée"
+    else:
+        matrix, origin = auto_marker(scene)
+        set_marker(proj, matrix)
+    placed = 0
+    if part_meshes(proj):
+        placed = len(refresh(context, proj))
+    return scene, missing, origin, placed
+
+
+MARKER_WORDS = ("repere", "repère", "marker", "bijou", "jewel", "collier", "necklace", "chaine", "chaîne", "chain")
+
+
+def auto_marker(scene):
+    """Repère automatique : un vide du display nommé comme un repère, sinon le curseur 3D de sa scène."""
+    scene.view_layers[0].update()      # positions monde des objets tout juste ajoutés
+    for obj in scene.objects:
+        if obj.type == "EMPTY" and any(w in obj.name.lower() for w in MARKER_WORDS) and not obj.get(TAG_PREVIEW):
+            return obj.matrix_world.copy(), f"vide « {obj.name} » du display"
+    return scene.cursor.matrix.copy(), "curseur 3D du display"
 
 
 def set_marker(proj, matrix):
@@ -275,7 +295,7 @@ def refresh(context, proj):
     if proj.preview_scene is None:
         raise McsError("Chargez d'abord le display.")
     if proj.preview_marker is None:
-        raise McsError("Définissez le repère de placement du bijou sur le display.")
+        set_marker(proj, auto_marker(proj.preview_scene)[0])
     comps = part_meshes(proj)
     if not comps:
         raise McsError("Aucun composant de bijou à placer.")
@@ -429,17 +449,15 @@ class MIO_OT_display_load(bpy.types.Operator):
     def execute(self, context):
         proj = get_project(context)
         try:
-            scene, missing, marker = load(context, proj, self.force)
+            scene, missing, origin, placed = load(context, proj, self.force)
         except McsError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        msg = f"Display chargé dans la scène « {scene.name} »."
-        if marker:
-            msg += " Repère enregistré restauré."
+        msg = f"Display chargé (« {scene.name} »), repère : {origin}."
+        msg += f" Bijou placé ({placed} pièce(s))." if placed else " Désignez le bijou (étape 2) puis « Actualiser le bijou »."
         if missing:
-            self.report({"WARNING"}, msg + f" {len(missing)} ressource(s) externe(s) manquante(s).")
-        else:
-            self.report({"INFO"}, msg)
+            msg += f" {len(missing)} ressource(s) externe(s) manquante(s) dans le display."
+        self.report({"INFO"}, msg)
         return {"FINISHED"}
 
 
@@ -475,7 +493,7 @@ class MIO_OT_marker_set(bpy.types.Operator):
 
 class MIO_OT_marker_save(bpy.types.Operator):
     bl_idname = "mio_chain.marker_save"
-    bl_label = "Enregistrer le repère"
+    bl_label = "Mémoriser cette position"
     bl_description = "Mémorise ce repère pour ce fichier display (réutilisé à chaque chargement)"
 
     def execute(self, context):
@@ -491,7 +509,7 @@ class MIO_OT_marker_save(bpy.types.Operator):
 
 class MIO_OT_preview_refresh(bpy.types.Operator):
     bl_idname = "mio_chain.preview_refresh"
-    bl_label = "Actualiser l'aperçu"
+    bl_label = "Actualiser le bijou"
     bl_description = "Remplace la copie du bijou par l'état actuel du projet, sans recharger le display"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -503,6 +521,32 @@ class MIO_OT_preview_refresh(bpy.types.Operator):
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
         self.report({"INFO"}, f"Aperçu à jour : {len(copies)} copie(s) placée(s) ensemble sur le repère.")
+        return {"FINISHED"}
+
+
+class MIO_OT_preview_move(bpy.types.Operator):
+    bl_idname = "mio_chain.preview_move"
+    bl_label = "Déplacer le bijou"
+    bl_description = "Ouvre le display et sélectionne le repère qui porte le bijou : déplacez-le avec G, R et S"
+
+    def execute(self, context):
+        proj = get_project(context)
+        marker = proj.preview_marker
+        if proj.preview_scene is None or marker is None:
+            self.report({"ERROR"}, "Chargez d'abord le display.")
+            return {"CANCELLED"}
+        if context.window is not None:
+            context.window.scene = proj.preview_scene
+        view_layer = proj.preview_scene.view_layers[0]
+        if context.mode != "OBJECT":
+            bpy.ops.object.mode_set(mode="OBJECT")
+        for o in view_layer.objects:
+            o.select_set(False, view_layer=view_layer)
+        marker.hide_set(False, view_layer=view_layer)
+        marker.select_set(True, view_layer=view_layer)
+        view_layer.objects.active = marker
+        self.report({"INFO"}, "Bijou sélectionné : G pour déplacer, R pour tourner, S pour l'échelle, "
+                              "puis « Mémoriser cette position ».")
         return {"FINISHED"}
 
 
@@ -546,10 +590,15 @@ class MIO_OT_back_to_project(bpy.types.Operator):
 class MIO_OT_render(bpy.types.Operator):
     bl_idname = "mio_chain.render"
     bl_label = "Lancer le rendu"
-    bl_description = "Rend la scène d'aperçu avec la caméra choisie et enregistre l'image (Blender est occupé pendant le rendu)"
+    bl_description = "Rend la scène d'aperçu avec la caméra du display et enregistre l'image (Blender est occupé pendant le rendu)"
+
+    mode: bpy.props.EnumProperty(items=[("CURRENT", "Réglage actuel", ""), ("QUICK", "Rapide", ""),
+                                        ("FINAL", "Final", "")], default="CURRENT", options={"HIDDEN", "SKIP_SAVE"})
 
     def execute(self, context):
         proj = get_project(context)
+        if self.mode != "CURRENT":
+            proj.render_mode = self.mode
         try:
             out = render(context, proj)
         except McsError as exc:
@@ -565,4 +614,4 @@ class MIO_OT_render(bpy.types.Operator):
 
 
 CLASSES = (MIO_OT_display_analyse, MIO_OT_display_load, MIO_OT_marker_set, MIO_OT_marker_save,
-           MIO_OT_preview_refresh, MIO_OT_view_camera, MIO_OT_back_to_project, MIO_OT_render)
+           MIO_OT_preview_refresh, MIO_OT_preview_move, MIO_OT_view_camera, MIO_OT_back_to_project, MIO_OT_render)
