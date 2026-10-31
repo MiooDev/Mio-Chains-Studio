@@ -255,11 +255,13 @@ def main():
     res_objs = {o["mcs_svg_src"]: o for o in svg.results(p)}
     check("4 maillages produits", len(res_objs) == 4 and all(o.type == "MESH" for o in res_objs.values()))
     e = {k: heights_along(o) for k, o in res_objs.items()}
-    check("Couche 1 : 0,05 m, de 0 à 0,05", abs(e[fond.name][0]) < 1e-6 and abs(e[fond.name][1] - 0.05) < 1e-6, e[fond.name])
-    check("Couche 2 : 0,025 m, posée sur la couche 1", abs(e[lettre.name][0] - 0.05) < 1e-6
-          and abs(e[lettre.name][1] - 0.075) < 1e-6 and abs(e[medaille.name][0] - 0.05) < 1e-6, e[lettre.name])
-    check("Couche 3 : 0,015 m, posée sur la couche 2", abs(e[detail.name][0] - 0.075) < 1e-6
-          and abs(e[detail.name][1] - 0.09) < 1e-6, e[detail.name])
+    check("Épaisseurs par défaut 0,02 / 0,01 / 0,005 m, espace 0",
+          np.allclose([p.thickness_1, p.thickness_2, p.thickness_3, p.layer_gap], [0.02, 0.01, 0.005, 0.0], atol=1e-7))
+    check("Couche 1 : 0,02 m, de 0 à 0,02", abs(e[fond.name][0]) < 1e-6 and abs(e[fond.name][1] - 0.02) < 1e-6, e[fond.name])
+    check("Couche 2 : 0,01 m, posée sur la couche 1", abs(e[lettre.name][0] - 0.02) < 1e-6
+          and abs(e[lettre.name][1] - 0.03) < 1e-6 and abs(e[medaille.name][0] - 0.02) < 1e-6, e[lettre.name])
+    check("Couche 3 : 0,005 m, posée sur la couche 2", abs(e[detail.name][0] - 0.03) < 1e-6
+          and abs(e[detail.name][1] - 0.035) < 1e-6, e[detail.name])
     lm = res_objs[lettre.name]
     check("Forme noire conservée (faces et trou)", lm.get("mcs_flat_faces") == flat_faces[lettre.name]
           and len(lm.data.polygons) > 2 * flat_faces[lettre.name])
@@ -284,12 +286,12 @@ def main():
     run("svg_prepare")
     e3 = {o["mcs_svg_src"]: heights_along(o) for o in svg.results(p)}
     check("Épaisseur modifiée : couches recalculées", abs(e3[fond.name][1] - 0.03) < 1e-6 and abs(e3[lettre.name][0] - 0.03) < 1e-6)
-    p.thickness_1 = 0.05
+    p.thickness_1 = 0.02
     p.stack_axis = "NEG_Z"
     select_only(*svg.results(p))
     run("svg_prepare")
     e4 = {o["mcs_svg_src"]: heights_along(o) for o in svg.results(p)}
-    check("Direction −Z respectée", abs(e4[fond.name][0] + 0.05) < 1e-6 and abs(e4[fond.name][1]) < 1e-6, e4[fond.name])
+    check("Direction −Z respectée", abs(e4[fond.name][0] + 0.02) < 1e-6 and abs(e4[fond.name][1]) < 1e-6, e4[fond.name])
     p.stack_axis = "POS_Z"
     select_only(*svg.results(p))
     run("svg_prepare")
@@ -668,7 +670,7 @@ def main():
     p = proj()
     check("Références conservées", all(getattr(p, k) is not None and getattr(p, k).name == v for k, v in names.items()),
           {k: getattr(p, k).name if getattr(p, k) else None for k in names})
-    check("Composants et réglages conservés", len(p.parts) == n_parts and abs(p.thickness_2 - 0.025) < 1e-9)
+    check("Composants et réglages conservés", len(p.parts) == n_parts and abs(p.thickness_2 - 0.01) < 1e-6)
     check("Presets toujours disponibles", "argent" in presets.names())
     check("Statut 8 après réouverture", status.step8(bpy.context, p)[0] == "Terminé", status.step8(bpy.context, p)[1])
     n_obj = len(bpy.data.objects)

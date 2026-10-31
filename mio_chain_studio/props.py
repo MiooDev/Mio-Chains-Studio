@@ -72,12 +72,12 @@ class MCS_Project(bpy.types.PropertyGroup):
     project_id: StringProperty(options={"HIDDEN"})
 
     # --- 1. SVG -------------------------------------------------------------------
-    thickness_1: FloatProperty(name="Couche 1", default=0.05, min=0.0001, soft_max=1.0, precision=4,
+    thickness_1: FloatProperty(name="Couche 1", default=0.02, min=0.0001, soft_max=1.0, precision=4,
                                subtype="DISTANCE", unit="LENGTH",
                                description="Épaisseur réelle de la couche 1 (la plus proche du sol), en mètres")
-    thickness_2: FloatProperty(name="Couche 2", default=0.025, min=0.0001, soft_max=1.0, precision=4,
+    thickness_2: FloatProperty(name="Couche 2", default=0.01, min=0.0001, soft_max=1.0, precision=4,
                                subtype="DISTANCE", unit="LENGTH", description="Épaisseur réelle de la couche 2")
-    thickness_3: FloatProperty(name="Couche 3", default=0.015, min=0.0001, soft_max=1.0, precision=4,
+    thickness_3: FloatProperty(name="Couche 3", default=0.005, min=0.0001, soft_max=1.0, precision=4,
                                subtype="DISTANCE", unit="LENGTH", description="Épaisseur réelle de la couche 3")
     layer_gap: FloatProperty(name="Espace entre couches", default=0.0, min=0.0, soft_max=0.01, precision=4,
                              subtype="DISTANCE", unit="LENGTH", description="0 = les couches se touchent")

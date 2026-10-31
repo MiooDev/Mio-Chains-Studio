@@ -1,4 +1,4 @@
-# Vérifications, limites connues et tests restants (version 0.2.1)
+# Vérifications, limites connues et tests restants (version 0.2.2)
 
 ## Environnement des tests réellement exécutés
 
@@ -14,7 +14,7 @@
 | Point demandé | Vérification exécutée |
 |---|---|
 | Formes SVG conservées après retrait des noirs | Faces de dos et trou de la lettre noire conservés ; forme entièrement noire gardée sans matériau ; matériaux non noirs identiques ; dessin XY inchangé |
-| Épaisseurs réelles et contact | Mesuré : 0,05 / 0,025 / 0,015 m ; dos de la couche 2 = avant de la couche 1 ; idem pour la couche 3 ; direction −Z |
+| Épaisseurs réelles et contact | Mesuré : 0,02 / 0,01 / 0,005 m (valeurs par défaut) ; dos de la couche 2 = avant de la couche 1 ; idem pour la couche 3 ; direction −Z |
 | SVG réaliste (corrigé en 0.2.1) | Tracés avec points alignés (faces de surface nulle), trous et courbes de Bézier : solides fermés et bien orientés, volume = surface × épaisseur, faces nulles signalées |
 | Préparation « tout ou rien » | Courbe non plane : refus avant toute création ; échec simulé après construction : nouveaux maillages retirés, anciens gardés, sources non masquées |
 | Pas d'accumulation | Deux clics de plus : épaisseurs identiques, 4 maillages ; une épaisseur modifiée recalcule l'empilement |

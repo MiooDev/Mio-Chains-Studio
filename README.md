@@ -6,12 +6,12 @@ Addon Blender pour préparer **vos propres pendentifs et chaînes FiveM** avec *
 |---|---|
 | Blender | **5.2** (vérifié avec 5.2.3 LTS) |
 | Sollumz | **2.9.0** (dernière version publiée, vérifiée) avec sa dépendance `szio` |
-| Addon | 0.2.1 |
+| Addon | 0.2.2 |
 
 ## Installation
 
 1. Installez et activez **Sollumz 2.9.0** et ses dépendances (préférences de Sollumz → *Install dependencies*).
-2. Blender → **Édition → Préférences → Extensions** → menu **⌄** → **Installer depuis le disque…** → `dist/mio_chain_studio-0.2.1.zip`.
+2. Blender → **Édition → Préférences → Extensions** → menu **⌄** → **Installer depuis le disque…** → `dist/mio_chain_studio-0.2.2.zip`.
 3. Extrayez **Teef.zip** en conservant son arborescence :
    ```
    Teef/
@@ -35,7 +35,7 @@ Chaque section affiche un statut **À faire / À vérifier / Terminé**, recalcu
    - Si toutes les courbes sont à la même hauteur, l'addon ne devine rien : utilisez les boutons **1 / 2 / 3** ou le champ de chaque courbe. Plusieurs courbes peuvent partager une couche.
 3. Cliquez **Préparer les SVG sélectionnés**. L'addon :
    - retire les matériaux noirs et leurs affectations, en gardant toute la géométrie (même les formes noires) et les autres matériaux ;
-   - convertit les courbes en maillages et donne leur épaisseur aux couches : 0,05 m, 0,025 m et 0,015 m par défaut, modifiables ;
+   - convertit les courbes en maillages et donne leur épaisseur aux couches : 0,02 m, 0,01 m et 0,005 m par défaut, modifiables ;
    - empile les couches le long de **+Z** (direction réglable), dos de la couche 2 contre l'avant de la couche 1, sans espace par défaut ;
    - mesure les épaisseurs réelles et le contact entre couches, puis contrôle les faces de dos et d'avant sur leur plan, la surface du dessin et l'orientation des faces.
 
