@@ -639,7 +639,10 @@ def main():
 
     # Display -----------------------------------------------------------------------------
     print("\n[A] Display")
-    display_path = os.path.join(WORK, "display.blend")
+    os.makedirs(os.path.join(WORK, "Textures"))
+    make_png(os.path.join(WORK, "Textures", "kria_texture.png"), (0.5, 0.1, 0.1, 1))
+    os.makedirs(os.path.join(WORK, "displays", "v1"))
+    display_path = os.path.join(WORK, "displays", "v1", "display.blend")
     make_display(display_path)
     p.display_path = os.path.join(WORK, "absent.blend")
     check("Display manquant : erreur", run("display_load") != {"FINISHED"})
@@ -651,6 +654,21 @@ def main():
           len(display.preview_objects(p, "copy")) == len(part_meshes(p))
           and (p.preview_marker.matrix_world.translation - mk.matrix_world.translation).length < 1e-6)
     check("Caméra et réglages du display repris", p.render_camera and ps.cycles.samples == 128)
+    kria = [i for i in bpy.data.images if i.name.startswith("kria_texture")][0]
+    check("Texture en chemin relatif au display retrouvée", os.path.samefile(bpy.path.abspath(kria.filepath),
+          os.path.join(WORK, "Textures", "kria_texture.png")), kria.filepath)
+    argent = [i for i in bpy.data.images if i.name.startswith("argent_diff") and "Ailleurs" not in i.filepath
+              and i.users and any(n.image == i for m in bpy.data.materials if m.name.startswith("Bijou_Ancien")
+                                  for n in m.node_tree.nodes if n.bl_idname == "ShaderNodeTexImage")]
+    check("Texture introuvable reprise de votre projet (même fichier)", argent and os.path.samefile(
+          bpy.path.abspath(argent[0].filepath), os.path.join(WORK, "tex", "argent_diff.png")))
+    missing = json.loads(p.display_missing)
+    check("Seule la texture vraiment absente est signalée", len(missing) == 1 and "velours" in missing[0], missing)
+    os.makedirs(os.path.join(WORK, "autres", "sous_dossier"))
+    make_png(os.path.join(WORK, "autres", "sous_dossier", "velours.png"), (0.2, 0, 0.3, 1))
+    check("Rechercher les textures manquantes (dossier choisi)", run("display_find_textures",
+          directory=os.path.join(WORK, "autres")) == {"FINISHED"} and json.loads(p.display_missing) == [],
+          p.display_missing)
     check("2. Déplacer le bijou : repère sélectionné dans le display", run("preview_move") == {"FINISHED"}
           and bpy.context.window.scene == ps and ps.view_layers[0].objects.active == p.preview_marker)
     p.preview_marker.location.x += 0.1

@@ -6,12 +6,12 @@ Addon Blender pour préparer **vos propres pendentifs et chaînes FiveM** avec *
 |---|---|
 | Blender | **5.2** (vérifié avec 5.2.3 LTS) |
 | Sollumz | **2.9.0** (dernière version publiée, vérifiée) avec sa dépendance `szio` |
-| Addon | 0.3.1 |
+| Addon | 0.3.2 |
 
 ## Installation
 
 1. Installez et activez **Sollumz 2.9.0** et ses dépendances (préférences de Sollumz → *Install dependencies*).
-2. Blender → **Édition → Préférences → Extensions** → menu **⌄** → **Installer depuis le disque…** → `dist/mio_chain_studio-0.3.1.zip`.
+2. Blender → **Édition → Préférences → Extensions** → menu **⌄** → **Installer depuis le disque…** → `dist/mio_chain_studio-0.3.2.zip`.
 3. Extrayez **Teef.zip** en conservant son arborescence :
    ```
    Teef/
@@ -133,6 +133,8 @@ Section séparée et facultative, en quatre gestes :
 2. **Déplacer le bijou (G / R / S)** ouvre le display et sélectionne le repère qui porte le bijou. **Mémoriser cette position** la garde pour les prochains projets.
 3. **Actualiser le bijou** après une modification, sans recharger le display ni créer de doublon.
 4. **Voir par la caméra**, puis **Rendu rapide** ou **Rendu final**. **Revenir au projet** vous ramène à votre scène.
+
+**Textures du display** : si une texture du display est introuvable (fichier déplacé, chemin relatif cassé), l'addon reprend la même texture déjà utilisée dans votre projet (même nom de fichier). S'il en reste, **Rechercher les textures manquantes…** vous laisse choisir votre dossier de textures ; Blender y cherche les fichiers par leur nom, sous-dossiers compris.
 
 Caméra, résolution, dossier des rendus, mode de chargement et décalages sont dans le sous-panneau **Options**, fermé par défaut. Le display, ses lumières, ses caméras et les copies d'aperçu sont exclus de l'export.
 

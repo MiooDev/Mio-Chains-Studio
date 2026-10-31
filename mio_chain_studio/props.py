@@ -187,6 +187,8 @@ class MCS_Project(bpy.types.PropertyGroup):
     display_scene_name: StringProperty(name="Scène du display")
     display_loaded_path: StringProperty(options={"HIDDEN"})
     display_missing: StringProperty(options={"HIDDEN"})
+    display_image_names: StringProperty(options={"HIDDEN"})
+    display_textures_note: StringProperty(options={"HIDDEN"})
     preview_scene: PointerProperty(type=bpy.types.Scene)
     preview_marker: PointerProperty(type=bpy.types.Object, name="Repère")
     preview_root: PointerProperty(type=bpy.types.Object)

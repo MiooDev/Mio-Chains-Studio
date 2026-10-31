@@ -468,8 +468,17 @@ class MIO_PT_display(_Base, bpy.types.Panel):
         row.operator("mio_chain.render", text="Rendu final", icon="RENDER_RESULT").mode = "FINAL"
         if context.scene != project_scene(context):
             layout.operator("mio_chain.back_to_project", icon="LOOP_BACK")
+        missing = json.loads(proj.display_missing or "[]")
+        if proj.display_textures_note:
+            draw_wrapped(layout, context, proj.display_textures_note, icon="CHECKMARK")
+        if missing:
+            box = layout.box()
+            box.label(text=f"{len(missing)} texture(s) du display introuvable(s)", icon="ERROR")
+            for m in missing[:4]:
+                draw_wrapped(box, context, m)
+            box.operator("mio_chain.display_find_textures", icon="VIEWZOOM")
         for sev, msg, fix in issues:
-            if sev != "INFO" or "manquante" in msg:
+            if sev != "INFO":
                 draw_wrapped(layout, context, msg + (f" → {fix}" if fix else ""), icon=SEVERITY_ICONS[sev])
 
 

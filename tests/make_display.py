@@ -45,5 +45,23 @@ presentoir.objects.link(bust)
 for o in (cam, light, marker):
     scene.collection.objects.link(o)
 scene.camera = cam
+# Ancien bijou du display : textures en chemins RELATIFS au fichier du display (cas réel).
+mat2 = bpy.data.materials.new("Bijou_Ancien")
+relative = []
+for name, rel in (("kria_texture.png", "//../../Textures/kria_texture.png"),
+                  ("argent_diff.png", "//../../Ailleurs/argent_diff.png")):
+    node = mat2.node_tree.nodes.new("ShaderNodeTexImage")
+    node.image = bpy.data.images.new(name, 4, 4)
+    node.image.source = "FILE"
+    relative.append((node.image, rel))
+me2 = bpy.data.meshes.new("Ancien_Bijou")
+me2.from_pydata([(0, 0, 0), (0.01, 0, 0), (0, 0.01, 0)], [], [(0, 1, 2)])
+me2.materials.append(mat2)
+old = bpy.data.objects.new("Ancien_Bijou", me2)
+old.location = (0.3, 0, 1.2)
+scene.collection.objects.link(old)
 bpy.ops.wm.save_as_mainfile(filepath=path)
+for img, rel in relative:
+    img.filepath = rel
+bpy.ops.wm.save_mainfile()
 print("display écrit", path)

@@ -100,6 +100,58 @@ def unload(proj):
     proj.preview_signature = ""
 
 
+def _relative_to(path, base_dir):
+    """Chemin « //… » d'un fichier .blend, résolu depuis le dossier de ce fichier (et non du projet)."""
+    rel = path[2:]
+    if os.sep == "/":
+        rel = rel.replace("\\", "/")
+    return os.path.normpath(os.path.join(base_dir, rel))
+
+
+def resolve_images(new_images, display_path, before_images):
+    """Retrouve les textures du display : chemin relatif au display, sinon même fichier déjà utilisé dans le projet.
+
+    Retourne (retrouvées par chemin relatif, reprises du projet).
+    """
+    display_dir = os.path.dirname(display_path)
+    project_files = {}
+    for img in before_images:
+        if img.packed_file is None and img.source == "FILE" and img.filepath:
+            path = abspath(img.filepath)
+            if os.path.isfile(path):
+                project_files.setdefault(os.path.basename(path).lower(), path)
+    by_relative, from_project = [], []
+    for img in new_images:
+        if img.packed_file is not None or img.source not in {"FILE", "SEQUENCE", "TILED"} or not img.filepath:
+            continue
+        if os.path.exists(abspath(img.filepath)):
+            continue
+        target, found_by = None, None
+        if img.filepath.startswith("//"):
+            candidate = _relative_to(img.filepath, display_dir)
+            if os.path.exists(candidate):
+                target, found_by = candidate, by_relative
+        if target is None:
+            name = os.path.basename(img.filepath.replace("\\", "/")).lower()
+            if name in project_files:
+                target, found_by = project_files[name], from_project
+        if target is not None:
+            img.filepath = target
+            img.reload()
+            found_by.append(img.name)
+    return by_relative, from_project
+
+
+def missing_display_images(proj):
+    """Images du display dont le fichier reste introuvable."""
+    out = []
+    for name in json.loads(proj.display_image_names or "[]"):
+        img = bpy.data.images.get(name)
+        if img is not None and img.packed_file is None and img.filepath and not os.path.exists(abspath(img.filepath)):
+            out.append(f"Image : {img.name} ({img.filepath})")
+    return out
+
+
 def _scan_missing(new_images, new_libs):
     missing = []
     for img in new_images:
@@ -159,9 +211,17 @@ def load(context, proj, force=False):
             tag(obj, proj, role="display", generated=False, **{TAG_DISPLAY: 1})
     for coll in scene.collection.children_recursive:
         tag(coll, proj, role="display", generated=False, **{TAG_DISPLAY: 1})
-    missing = _scan_missing([i for i in bpy.data.images if i not in images_before],
-                            [l for l in bpy.data.libraries if l not in libs_before])
+    new_images = [i for i in bpy.data.images if i not in images_before]
+    by_relative, from_project = resolve_images(new_images, path, images_before)
+    proj.display_image_names = json.dumps([i.name for i in new_images])
+    missing = _scan_missing(new_images, [l for l in bpy.data.libraries if l not in libs_before])
     proj.display_missing = json.dumps(missing)
+    notes = []
+    if by_relative:
+        notes.append(f"{len(by_relative)} texture(s) retrouvée(s) depuis le dossier du display")
+    if from_project:
+        notes.append(f"{len(from_project)} texture(s) reprise(s) de votre projet (même fichier)")
+    proj.display_textures_note = (", ".join(notes) + ".") if notes else ""
     proj.preview_scene = scene
     proj.display_loaded_path = path
 
@@ -454,6 +514,8 @@ class MIO_OT_display_load(bpy.types.Operator):
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
         msg = f"Display chargé (« {scene.name} »), repère : {origin}."
+        if proj.display_textures_note:
+            msg += " " + proj.display_textures_note
         msg += f" Bijou placé ({placed} pièce(s))." if placed else " Désignez le bijou (étape 2) puis « Actualiser le bijou »."
         if missing:
             msg += f" {len(missing)} ressource(s) externe(s) manquante(s) dans le display."
@@ -521,6 +583,42 @@ class MIO_OT_preview_refresh(bpy.types.Operator):
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
         self.report({"INFO"}, f"Aperçu à jour : {len(copies)} copie(s) placée(s) ensemble sur le repère.")
+        return {"FINISHED"}
+
+
+class MIO_OT_display_find_textures(bpy.types.Operator):
+    bl_idname = "mio_chain.display_find_textures"
+    bl_label = "Rechercher les textures manquantes…"
+    bl_description = ("Choisissez votre dossier de textures : Blender y cherche (sous-dossiers compris) les fichiers "
+                      "manquants par leur nom (Fichier ▸ Données externes ▸ Rechercher les fichiers manquants)")
+    bl_options = {"REGISTER", "UNDO"}
+
+    directory: bpy.props.StringProperty(subtype="DIR_PATH")
+    filter_folder: bpy.props.BoolProperty(default=True, options={"HIDDEN"})
+
+    def invoke(self, context, event):
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        proj = get_project(context)
+        folder = abspath(self.directory)
+        if not os.path.isdir(folder):
+            self.report({"ERROR"}, f"Dossier introuvable : {folder}")
+            return {"CANCELLED"}
+        before = len(missing_display_images(proj))
+        bpy.ops.file.find_missing_files(directory=folder + os.sep)
+        for name in json.loads(proj.display_image_names or "[]"):
+            img = bpy.data.images.get(name)
+            if img is not None and img.filepath and os.path.exists(abspath(img.filepath)):
+                img.reload()
+        missing = missing_display_images(proj)
+        proj.display_missing = json.dumps(missing)
+        found = before - len(missing)
+        if missing:
+            self.report({"WARNING"}, f"{found} texture(s) retrouvée(s), {len(missing)} encore introuvable(s).")
+        else:
+            self.report({"INFO"}, f"{found} texture(s) retrouvée(s) : plus aucune texture manquante.")
         return {"FINISHED"}
 
 
@@ -614,4 +712,4 @@ class MIO_OT_render(bpy.types.Operator):
 
 
 CLASSES = (MIO_OT_display_analyse, MIO_OT_display_load, MIO_OT_marker_set, MIO_OT_marker_save,
-           MIO_OT_preview_refresh, MIO_OT_preview_move, MIO_OT_view_camera, MIO_OT_back_to_project, MIO_OT_render)
+           MIO_OT_preview_refresh, MIO_OT_display_find_textures, MIO_OT_preview_move, MIO_OT_view_camera, MIO_OT_back_to_project, MIO_OT_render)
