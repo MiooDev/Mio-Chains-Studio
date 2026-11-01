@@ -6,6 +6,7 @@ import os
 import bpy
 
 from . import colors
+from . import display
 from . import materials
 from . import presets
 from . import rigging
@@ -465,15 +466,32 @@ class MCS_PT_display(_Base, bpy.types.Panel):
             r = layout.row()
             r.scale_y = 1.4
             r.operator("mio_chain.display_load", text="1. Charger le display", icon="APPEND_BLEND")
-            draw_wrapped(layout, context, "Charge votre .blend dans une scène à part et y place une copie du bijou. "
+            draw_wrapped(layout, context, "Charge votre .blend dans une scène à part (sa caméra, ses lumières, "
+                                          "ses textures). Ensuite : « Mettre la chaîne sur le display ». "
                                           "Rien de cette scène n'est exporté.", icon="INFO")
             return
         row.operator("mio_chain.display_load", text="", icon="FILE_REFRESH").force = True
+        placed = status.cached("disp_copies", lambda: [c.get(display.SRC) for c in display.preview_objects(proj, "copy")])
+        r = layout.row()
+        r.scale_y = 1.5
+        if placed:
+            r.operator("mio_chain.preview_refresh", text="2. Actualiser la chaîne sur le display", icon="FILE_REFRESH")
+            draw_wrapped(layout, context, f"Sur le display : {', '.join(placed[:3])}" +
+                         ("…" if len(placed) > 3 else "") + ".", icon="CHECKMARK")
+        else:
+            r.operator("mio_chain.preview_refresh", text="2. Mettre la chaîne sur le display", icon="IMPORT")
+            if display.uses_selection(proj):
+                n = len(status.cached("disp_sel", lambda: display.selected_meshes(context)))
+                draw_wrapped(layout, context, f"{n} maillage(s) sélectionné(s) dans le projet seront posés." if n else
+                             "Sélectionnez d'abord votre chaîne (et son pendentif) dans la scène du projet, "
+                             "ou désignez-les à l'étape 2.", icon="INFO")
+            else:
+                draw_wrapped(layout, context, f"Le bijou de l'étape 2 ({len(part_meshes(proj))} pièce(s)) sera posé.",
+                             icon="INFO")
         col = layout.column(align=True)
         col.scale_y = 1.3
-        col.operator("mio_chain.preview_move", text="2. Déplacer le bijou (G / R / S)", icon="OBJECT_ORIGIN")
+        col.operator("mio_chain.preview_move", text="3. Déplacer la chaîne (G / R / S)", icon="OBJECT_ORIGIN")
         col.operator("mio_chain.marker_save", icon="PINNED")
-        col.operator("mio_chain.preview_refresh", text="3. Actualiser le bijou", icon="FILE_REFRESH")
         col.operator("mio_chain.view_camera", text="4. Voir par la caméra", icon="CAMERA_DATA")
         row = layout.row(align=True)
         row.scale_y = 1.3
@@ -481,15 +499,26 @@ class MCS_PT_display(_Base, bpy.types.Panel):
         row.operator("mio_chain.render", text="Rendu final", icon="RENDER_RESULT").mode = "FINAL"
         if context.scene != project_scene(context):
             layout.operator("mio_chain.back_to_project", icon="LOOP_BACK")
-        missing = json.loads(proj.display_missing or "[]")
         if proj.display_textures_note:
             draw_wrapped(layout, context, proj.display_textures_note, icon="CHECKMARK")
-        if missing:
+        missing = status.cached("disp_missing", lambda: [i.name for i in display.missing_image_list(proj)])
+        others = [m for m in json.loads(proj.display_missing or "[]") if not m.startswith("Image : ")]
+        if missing or others:
             box = layout.box()
-            box.label(text=f"{len(missing)} texture(s) du display introuvable(s)", icon="ERROR")
-            for m in missing[:4]:
+            box.label(text=f"{len(missing) + len(others)} ressource(s) du display introuvable(s)", icon="ERROR")
+            for name in missing[:6]:
+                img = bpy.data.images.get(name)
+                row = box.row(align=True)
+                row.label(text=name, icon="IMAGE_DATA")
+                row.operator("mio_chain.display_relink_texture", text="Choisir…", icon="FILEBROWSER").image_name = name
+                if img is not None:
+                    draw_wrapped(box, context, img.filepath)
+            for m in others[:3]:
                 draw_wrapped(box, context, m)
             box.operator("mio_chain.display_find_textures", icon="VIEWZOOM")
+            draw_wrapped(box, context, "« Rechercher » : choisissez le dossier de vos textures, Blender retrouve les "
+                                       "fichiers du même nom (sous-dossiers compris). « Choisir… » : indiquez "
+                                       "vous-même le fichier, même s'il porte un autre nom.", icon="INFO")
         for sev, msg, fix in issues:
             if sev != "INFO":
                 draw_wrapped(layout, context, msg + (f" → {fix}" if fix else ""), icon=SEVERITY_ICONS[sev])
@@ -520,6 +549,7 @@ class MCS_PT_display_options(_Base, bpy.types.Panel):
         row = box.row(align=True)
         row.operator("mio_chain.marker_set", text="Repère sur l'objet actif").source = "ACTIVE"
         row.operator("mio_chain.marker_set", text="Sur le curseur").source = "CURSOR"
+        box.prop(proj, "preview_source")
         box.prop(proj, "preview_anchor")
         box.prop(proj, "preview_loc", text="Décalage")
         box.prop(proj, "preview_rot", text="Rotation")

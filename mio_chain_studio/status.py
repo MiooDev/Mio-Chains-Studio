@@ -191,9 +191,11 @@ def step_display(context, proj):
         return STATUS_TODO, [("INFO", "Facultatif : choisissez votre .blend puis « Charger le display ».", "")]
     issues = [("INFO", f"Ressource manquante dans le display — {m}", "") for m in json.loads(proj.display_missing or "[]")[:4]]
     if not display.preview_objects(proj, "copy"):
-        issues.append(("WARNING", "Bijou pas encore placé sur le display.", "Cliquez « Actualiser le bijou »."))
+        issues.append(("WARNING", "Chaîne pas encore posée sur le display.",
+                       "Cliquez « Mettre la chaîne sur le display »."))
     elif proj.preview_signature != cached("prev_sig", lambda: display.preview_signature(proj)):
-        issues.append(("WARNING", "Le bijou a changé depuis le placement.", "Cliquez « Actualiser le bijou »."))
+        issues.append(("WARNING", "La chaîne a changé depuis qu'elle a été posée.",
+                       "Cliquez « Actualiser la chaîne sur le display »."))
     return (STATUS_DONE if _ok(issues) else STATUS_CHECK), issues
 
 

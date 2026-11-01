@@ -646,6 +646,14 @@ def main():
     make_display(display_path)
     p.display_path = os.path.join(WORK, "absent.blend")
     check("Display manquant : erreur", run("display_load") != {"FINISHED"})
+    # Texture présente dans le projet UNIQUEMENT sous forme intégrée (packed) : le display doit la réutiliser.
+    tmp_spec = os.path.join(WORK, "tmp_spec", "spec_blanc.png")
+    os.makedirs(os.path.dirname(tmp_spec))
+    make_png(tmp_spec, (0.9, 0.9, 0.9, 1))
+    packed_spec = bpy.data.images.load(tmp_spec)
+    packed_spec.pack()
+    packed_spec.use_fake_user = True
+    shutil.rmtree(os.path.dirname(tmp_spec))
     p.display_path = display_path
     check("1. Charger le display (un seul clic)", run("display_load") == {"FINISHED"} and p.preview_scene is not None)
     ps = p.preview_scene
@@ -662,8 +670,43 @@ def main():
                                   for n in m.node_tree.nodes if n.bl_idname == "ShaderNodeTexImage")]
     check("Texture introuvable reprise de votre projet (même fichier)", argent and os.path.samefile(
           bpy.path.abspath(argent[0].filepath), os.path.join(WORK, "tex", "argent_diff.png")))
+    spec_users = [n for m in bpy.data.materials if m.name.startswith("Bijou_Ancien")
+                  for n in m.node_tree.nodes if n.bl_idname == "ShaderNodeTexImage" and n.image
+                  and n.image.name.startswith("spec_blanc")]
+    check("Texture introuvable reprise de votre projet même si elle y est intégrée (packed)",
+          spec_users and all(n.image == packed_spec for n in spec_users), [n.image.name for n in spec_users])
     missing = json.loads(p.display_missing)
     check("Seule la texture vraiment absente est signalée", len(missing) == 1 and "velours" in missing[0], missing)
+    find_rna = bpy.ops.mio_chain.display_find_textures.get_rna_type().properties
+    relink_rna = bpy.ops.mio_chain.display_relink_texture.get_rna_type().properties
+    check("Sélecteurs de textures : fichiers DDS affichés (filtre images + *.dds), dossiers aussi",
+          ".dds" in bpy.path.extensions_image
+          and all(r["filter_image"].default and r["filter_folder"].default and "*.dds" in r["filter_glob"].default
+                  for r in (find_rna, relink_rna)))
+    velours = [i for i in bpy.data.images if i.name.startswith("velours")][0]
+    autre_nom = os.path.join(WORK, "autres_noms", "velours_v2.png")
+    os.makedirs(os.path.dirname(autre_nom))
+    make_png(autre_nom, (0.3, 0, 0.3, 1))
+    check("« Choisir… » : fichier refusé s'il n'est pas une image", run("display_relink_texture", image_name=velours.name,
+          filepath=os.path.join(WORK, "projet.blend")) != {"FINISHED"})
+    check("« Choisir… » : texture reliée à un fichier d'un autre nom", run("display_relink_texture", image_name=velours.name,
+          filepath=autre_nom) == {"FINISHED"} and json.loads(p.display_missing) == []
+          and os.path.samefile(bpy.path.abspath(velours.filepath), autre_nom) and velours.size[0] == 64)
+    if TEEF:
+        dds_img = bpy.data.images.new("essai_dds", 4, 4)
+        dds_img.source = "FILE"
+        dds_img.filepath = os.path.join(WORK, "absent", "spec.dds")
+        mat_dds = bpy.data.materials.new("Essai_DDS")
+        mat_dds.use_nodes = True
+        mat_dds.node_tree.nodes.new("ShaderNodeTexImage").image = dds_img
+        p.display_image_names = json.dumps(json.loads(p.display_image_names) + [dds_img.name])
+        check("« Choisir… » : un vrai DDS de Teef est relié et lu par Blender", run("display_relink_texture",
+              image_name=dds_img.name, filepath=os.path.join(TEEF, "teef_000_u", "teef_spec_000.dds")) == {"FINISHED"}
+              and dds_img.size[0] > 0, tuple(dds_img.size))
+        bpy.data.materials.remove(mat_dds)
+        bpy.data.images.remove(dds_img)
+    velours.filepath = os.path.join(WORK, "absent", "velours.png")
+    p.display_missing = json.dumps(display.missing_display_images(p))
     os.makedirs(os.path.join(WORK, "autres", "sous_dossier"))
     make_png(os.path.join(WORK, "autres", "sous_dossier", "velours.png"), (0.2, 0, 0.3, 1))
     check("Rechercher les textures manquantes (dossier choisi)", run("display_find_textures",
@@ -676,12 +719,42 @@ def main():
     check("Revenir au projet", run("back_to_project") == {"FINISHED"} and bpy.context.window.scene.name == "Scene")
     with bpy.context.temp_override(scene=ps, view_layer=ps.view_layers[0], active_object=mk):
         check("Option : repère sur l'objet actif", run("marker_set", source="ACTIVE") == {"FINISHED"})
-    check("3. Actualiser le bijou", run("preview_refresh") == {"FINISHED"})
+    check("Actualiser la chaîne sur le display", run("preview_refresh", show=False) == {"FINISHED"})
     n = len(display.preview_objects(p, "copy"))
     n_mesh = len(bpy.data.meshes)
-    run("preview_refresh")
-    run("preview_refresh")
+    run("preview_refresh", show=False)
+    run("preview_refresh", show=False)
     check("Actualiser : pas de doublon", len(display.preview_objects(p, "copy")) == n and len(bpy.data.meshes) == n_mesh)
+
+    # « Mettre la chaîne sur le display » sans bijou désigné : la sélection du projet est posée.
+    saved_parts = [(pt.obj, pt.role) for pt in p.parts]
+    chain_obj = [o for o, r in part_meshes(p) if r == "CHAIN"][0]
+    p.parts.clear()
+    p.preview_parts.clear()
+    select_only()
+    check("Rien de sélectionné ni désigné : refus clair", run("preview_refresh") != {"FINISHED"}
+          and display.preview_sources(p) == [])
+    select_only(chain_obj)
+    ok = run("preview_refresh") == {"FINISHED"}
+    copies = display.preview_objects(p, "copy")
+    check("Mettre la chaîne sur le display : la chaîne sélectionnée y est posée",
+          ok and [c["mcs_preview_src"] for c in copies] == [chain_obj.name], [c.get("mcs_preview_src") for c in copies])
+    check("… dans la scène du display, qui s'affiche", bpy.context.window.scene == ps
+          and all(c.name in ps.objects for c in copies))
+    status.invalidate()
+    check("Statut de l'aperçu : chaîne posée", status.step_display(bpy.context, p)[0] == "Terminé",
+          status.step_display(bpy.context, p)[1])
+    check("Revenir au projet (après la pose)", run("back_to_project") == {"FINISHED"}
+          and bpy.context.window.scene.name == "Scene")
+    select_only()
+    check("Actualiser sans sélection : la chaîne mémorisée reste posée", run("preview_refresh", show=False) == {"FINISHED"}
+          and [c["mcs_preview_src"] for c in display.preview_objects(p, "copy")] == [chain_obj.name])
+    for obj, role in saved_parts:
+        item = p.parts.add()
+        item.obj, item.role = obj, role
+    run("preview_refresh", show=False)
+    check("Bijou désigné à l'étape 2 : il redevient la source (chaîne + pendentif)",
+          len(display.preview_objects(p, "copy")) == n)
     copy = display.preview_objects(p, "copy")[0]
     src = bpy.data.objects[copy["mcs_preview_src"]]
     check("Copie indépendante (maillage et matériaux)", copy.data != src.data
@@ -724,7 +797,7 @@ def main():
     check("Presets toujours disponibles", "argent" in presets.names())
     check("Statut 8 après réouverture", status.step8(bpy.context, p)[0] == "Terminé", status.step8(bpy.context, p)[1])
     n_obj = len(bpy.data.objects)
-    run("preview_refresh")
+    run("preview_refresh", show=False)
     check("Actualisation après réouverture sans doublon", len(bpy.data.objects) == n_obj)
     errs = draw_all_panels()
     check("Panneaux après réouverture", not errs, errs)

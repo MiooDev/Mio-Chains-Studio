@@ -127,16 +127,22 @@ Un export Blender réussi **ne valide pas** le bijou dans FiveM : testez-le en j
 
 ## Aperçu sur mon display
 Section séparée et facultative, en quatre gestes :
-1. Choisissez votre `.blend` puis **Charger le display**. En un clic :
-   - le display est ajouté dans une scène à part, avec son éclairage, ses matériaux, ses caméras et ses réglages de rendu ;
-   - une **copie** du bijou y est posée sur un repère : la position mémorisée pour ce display, sinon un vide dont le nom contient « repère », « bijou », « collier »…, sinon le curseur 3D.
-2. **Déplacer le bijou (G / R / S)** ouvre le display et sélectionne le repère qui porte le bijou. **Mémoriser cette position** la garde pour les prochains projets.
-3. **Actualiser le bijou** après une modification, sans recharger le display ni créer de doublon.
+1. Choisissez votre `.blend` puis **Charger le display**. Le display est ajouté dans une scène à part, avec son éclairage, ses matériaux, ses caméras et ses réglages de rendu. Si votre bijou est déjà désigné à l'étape 2, sa copie y est posée tout de suite.
+2. **Mettre la chaîne sur le display** pose une **copie** de votre chaîne dans la scène du display, puis vous y emmène :
+   - ce qui est posé : le bijou de l'étape 2 (chaîne et pendentif) ; s'il n'y en a pas, les maillages **sélectionnés dans la scène du projet** (sélectionnez votre chaîne avant de cliquer, l'addon s'en souvient) ;
+   - où : sur le repère, c'est-à-dire la position mémorisée pour ce display, sinon un vide dont le nom contient « repère », « bijou », « collier »…, sinon le curseur 3D.
+
+   Après une modification, le même bouton devient **Actualiser la chaîne sur le display** : il remplace la copie, sans recharger le display ni créer de doublon.
+3. **Déplacer la chaîne (G / R / S)** ouvre le display et sélectionne le repère qui porte la chaîne. **Mémoriser cette position** la garde pour les prochains projets.
 4. **Voir par la caméra**, puis **Rendu rapide** ou **Rendu final**. **Revenir au projet** vous ramène à votre scène.
 
-**Textures du display** : si une texture du display est introuvable (fichier déplacé, chemin relatif cassé), l'addon reprend la même texture déjà utilisée dans votre projet (même nom de fichier). S'il en reste, **Rechercher les textures manquantes…** vous laisse choisir votre dossier de textures ; Blender y cherche les fichiers par leur nom, sous-dossiers compris.
+**Textures du display** : si une texture du display est introuvable (fichier déplacé, chemin relatif cassé), l'addon reprend la même texture de votre projet (même nom de fichier, ou même nom de texture, y compris une texture intégrée au projet). Pour celles qui restent :
+- **Choisir…**, à côté de chaque texture manquante, vous laisse indiquer le fichier vous-même, même s'il porte un autre nom ;
+- **Rechercher les textures manquantes…** vous laisse choisir votre dossier de textures ; Blender y cherche les fichiers du même nom, sous-dossiers compris.
 
-Caméra, résolution, dossier des rendus, mode de chargement et décalages sont dans le sous-panneau **Options**, fermé par défaut. Le display, ses lumières, ses caméras et les copies d'aperçu sont exclus de l'export.
+Les deux sélecteurs affichent les dossiers et les images (`.dds`, `.png`, `.jpg`, `.tga`, `.tif`…).
+
+Caméra, résolution, dossier des rendus, mode de chargement, ce qui est posé (« Quoi placer ») et décalages sont dans le sous-panneau **Options**, fermé par défaut. Le display, ses lumières, ses caméras et les copies d'aperçu sont exclus de l'export.
 
 ## Code
 

@@ -49,7 +49,8 @@ scene.camera = cam
 mat2 = bpy.data.materials.new("Bijou_Ancien")
 relative = []
 for name, rel in (("kria_texture.png", "//../../Textures/kria_texture.png"),
-                  ("argent_diff.png", "//../../Ailleurs/argent_diff.png")):
+                  ("argent_diff.png", "//../../Ailleurs/argent_diff.png"),
+                  ("spec_blanc.png", "//../../../Textures/6-Maps/spec_blanc.png")):
     node = mat2.node_tree.nodes.new("ShaderNodeTexImage")
     node.image = bpy.data.images.new(name, 4, 4)
     node.image.source = "FILE"

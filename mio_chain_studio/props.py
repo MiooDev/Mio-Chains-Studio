@@ -203,6 +203,12 @@ class MCS_Project(bpy.types.PropertyGroup):
     preview_keep_materials: BoolProperty(name="Garder les matériaux de l'aperçu", default=True,
                                          description="À l'actualisation, réutiliser les matériaux d'aperçu déjà modifiés")
     preview_signature: StringProperty(options={"HIDDEN"})
+    preview_source: EnumProperty(name="Quoi placer", default="AUTO", items=[
+        ("AUTO", "Automatique", "Le bijou désigné à l'étape 2 ; s'il n'y en a pas, les maillages sélectionnés "
+                                "dans la scène du projet"),
+        ("SELECTION", "Objets sélectionnés", "Toujours les maillages sélectionnés dans la scène du projet"),
+    ])
+    preview_parts: CollectionProperty(type=MCS_Part)
     render_camera: PointerProperty(type=bpy.types.Object, poll=_poll_camera, name="Caméra")
     render_res_x: IntProperty(name="Largeur", default=1920, min=16)
     render_res_y: IntProperty(name="Hauteur", default=1080, min=16)

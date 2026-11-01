@@ -7,6 +7,7 @@ l'aperçu ne touche jamais le modèle destiné à FiveM. Rien de cette scène n'
 
 import json
 import os
+import re
 import time
 
 import bpy
@@ -18,11 +19,13 @@ from .utils import (
     TAG_DISPLAY,
     TAG_PREVIEW,
     TAG_PROJECT,
+    TAG_REFERENCE,
     abspath,
     get_project,
     hash_strings,
+    iter_tree,
+    object_signature,
     part_meshes,
-    parts_signature,
     project_scene,
     tag,
     world_bounds,
@@ -30,6 +33,10 @@ from .utils import (
 
 KIND = "mcs_preview_kind"       # copy / root / marker / collection / material
 SRC = "mcs_preview_src"         # nom de l'objet ou du matériau source
+
+# Fichiers proposés dans les sélecteurs de textures (le DDS en premier : textures GTA / FiveM).
+IMAGE_GLOB = "*.dds;*.png;*.jpg;*.jpeg;*.tga;*.tif;*.tiff;*.bmp;*.exr;*.hdr;*.webp"
+IMAGE_EXTS = tuple(g[1:] for g in IMAGE_GLOB.split(";"))
 
 
 def marker_key(path):
@@ -74,6 +81,71 @@ def preview_objects(proj, kind=None):
             if o.get(TAG_PROJECT) == pid and o.get(TAG_PREVIEW) and (kind is None or o.get(KIND) == kind)]
 
 
+def _placeable(obj):
+    return (obj.type == "MESH" and not obj.get(TAG_PREVIEW) and not obj.get(TAG_DISPLAY)
+            and not obj.get(TAG_REFERENCE))
+
+
+def selected_meshes(context):
+    """Maillages sélectionnés dans la scène du PROJET (même si la vue affiche le display)."""
+    pscene = project_scene(context)
+    view_layer = context.view_layer if context.scene == pscene else pscene.view_layers[0]
+    out = []
+    for obj in pscene.objects:
+        try:
+            if _placeable(obj) and obj.select_get(view_layer=view_layer):
+                out.append(obj)
+        except RuntimeError:
+            continue
+    return out
+
+
+def uses_selection(proj):
+    """La sélection du projet sert de bijou : choix « Objets sélectionnés », ou aucun composant à l'étape 2."""
+    return proj.preview_source == "SELECTION" or not part_meshes(proj)
+
+
+def preview_sources(proj):
+    """[(objet, rôle)] posés sur le display : le bijou de l'étape 2, sinon les objets mémorisés par sélection."""
+    if not uses_selection(proj):
+        return part_meshes(proj)
+    out, seen = [], set()
+    for item in proj.preview_parts:
+        obj = item.obj
+        if obj is None or not obj.users_scene:
+            continue
+        for o in (iter_tree(obj) if obj.type == "EMPTY" else [obj]):
+            if _placeable(o) and o.name not in seen:
+                seen.add(o.name)
+                out.append((o, "SELECTION"))
+    return out
+
+
+def capture_selection(context, proj):
+    """Mémorise les maillages sélectionnés du projet comme bijou de l'aperçu ; renvoie leur nombre."""
+    sel = selected_meshes(context)
+    if sel:
+        proj.preview_parts.clear()
+        for obj in sel:
+            proj.preview_parts.add().obj = obj
+    return len(sel)
+
+
+NOTHING_TO_PLACE = ("Aucune chaîne à poser : sélectionnez votre chaîne (et son pendentif) dans la scène du projet, "
+                    "ou désignez-les à l'étape 2, puis recliquez « Mettre la chaîne sur le display ».")
+
+
+def place(context, proj):
+    """Bouton « Mettre la chaîne sur le display » : choisit quoi poser puis crée ou remplace la copie."""
+    if proj.preview_scene is None:
+        raise McsError("Chargez d'abord le display.")
+    if uses_selection(proj):
+        capture_selection(context, proj)
+    if not preview_sources(proj):
+        raise McsError(NOTHING_TO_PLACE)
+    return refresh(context, proj)
+
+
 def _remove_obj(obj):
     data = obj.data
     bpy.data.objects.remove(obj, do_unlink=True)
@@ -108,56 +180,99 @@ def _relative_to(path, base_dir):
     return os.path.normpath(os.path.join(base_dir, rel))
 
 
-def resolve_images(new_images, display_path, before_images):
-    """Retrouve les textures du display : chemin relatif au display, sinon même fichier déjà utilisé dans le projet.
+def _file_name(filepath):
+    return os.path.basename(filepath.replace("\\", "/")).lower()
 
+
+def _base_name(name):
+    """Nom d'image sans le suffixe « .001 » ajouté par Blender quand le nom existe déjà dans le projet."""
+    return re.sub(r"\.\d{3}$", "", name).lower()
+
+
+def resolve_images(new_images, display_path, before_images):
+    """Retrouve les textures du display.
+
+    Ordre : chemin relatif au display ; même fichier déjà utilisé dans le projet ; même texture du projet
+    (même nom), y compris une texture intégrée (packed) au projet, qui est alors réutilisée telle quelle.
     Retourne (retrouvées par chemin relatif, reprises du projet).
     """
     display_dir = os.path.dirname(display_path)
-    project_files = {}
+    project_files, project_packed, project_by_name = {}, {}, {}
     for img in before_images:
-        if img.packed_file is None and img.source == "FILE" and img.filepath:
+        if img.source not in {"FILE", "SEQUENCE", "TILED"}:
+            continue
+        if img.packed_file is not None:
+            project_by_name.setdefault(img.name.lower(), img)
+            if img.filepath:
+                project_packed.setdefault(_file_name(img.filepath), img)
+        elif img.filepath:
             path = abspath(img.filepath)
             if os.path.isfile(path):
                 project_files.setdefault(os.path.basename(path).lower(), path)
+                project_by_name.setdefault(img.name.lower(), img)
     by_relative, from_project = [], []
     for img in new_images:
         if img.packed_file is not None or img.source not in {"FILE", "SEQUENCE", "TILED"} or not img.filepath:
             continue
         if os.path.exists(abspath(img.filepath)):
             continue
-        target, found_by = None, None
+        name = img.name
         if img.filepath.startswith("//"):
             candidate = _relative_to(img.filepath, display_dir)
             if os.path.exists(candidate):
-                target, found_by = candidate, by_relative
-        if target is None:
-            name = os.path.basename(img.filepath.replace("\\", "/")).lower()
-            if name in project_files:
-                target, found_by = project_files[name], from_project
-        if target is not None:
-            img.filepath = target
+                img.filepath = candidate
+                img.reload()
+                by_relative.append(name)
+                continue
+        file_name = _file_name(img.filepath)
+        same = project_files.get(file_name)
+        twin = None if same else (project_packed.get(file_name) or project_by_name.get(_base_name(img.name)))
+        if twin is not None and twin.packed_file is None:
+            same, twin = abspath(twin.filepath), None
+        if same:
+            img.filepath = same
             img.reload()
-            found_by.append(img.name)
+            from_project.append(name)
+        elif twin is not None:
+            img.user_remap(twin)          # la texture intégrée au projet remplace la copie introuvable
+            from_project.append(name)
     return by_relative, from_project
 
 
-def missing_display_images(proj):
-    """Images du display dont le fichier reste introuvable."""
+def _is_missing(img):
+    """Image utilisée dont le fichier est introuvable (une image remplacée par celle du projet n'a plus d'utilisateur)."""
+    return (img.users > 0 and img.packed_file is None and img.source in {"FILE", "SEQUENCE", "TILED"}
+            and bool(img.filepath) and not os.path.exists(abspath(img.filepath)))
+
+
+def missing_image_list(proj):
+    """Images du display (objets Blender) dont le fichier reste introuvable."""
     out = []
     for name in json.loads(proj.display_image_names or "[]"):
         img = bpy.data.images.get(name)
-        if img is not None and img.packed_file is None and img.filepath and not os.path.exists(abspath(img.filepath)):
-            out.append(f"Image : {img.name} ({img.filepath})")
+        if img is not None and _is_missing(img):
+            out.append(img)
     return out
+
+
+def missing_display_images(proj):
+    """Images du display dont le fichier reste introuvable (texte affiché)."""
+    return [f"Image : {img.name} ({img.filepath})" for img in missing_image_list(proj)]
+
+
+def update_missing(proj):
+    """Recalcule la liste des ressources manquantes (les bibliothèques liées absentes restent signalées)."""
+    others = [m for m in json.loads(proj.display_missing or "[]") if not m.startswith("Image : ")]
+    missing = missing_display_images(proj) + others
+    proj.display_missing = json.dumps(missing)
+    return missing
 
 
 def _scan_missing(new_images, new_libs):
     missing = []
     for img in new_images:
-        if img.packed_file is None and img.source in {"FILE", "SEQUENCE", "TILED"} and img.filepath:
-            if not os.path.exists(abspath(img.filepath)):
-                missing.append(f"Image : {img.name} ({img.filepath})")
+        if _is_missing(img):
+            missing.append(f"Image : {img.name} ({img.filepath})")
     for lib in new_libs:
         if not os.path.isfile(abspath(lib.filepath)):
             missing.append(f"Bibliothèque liée : {lib.filepath}")
@@ -168,7 +283,7 @@ def load(context, proj, force=False):
     path = _check_file(proj)
     if proj.preview_scene is not None:
         if not force:
-            raise McsError("Le display est déjà chargé : cliquez « Actualiser le bijou », ou « Recharger » "
+            raise McsError("Le display est déjà chargé : cliquez « Mettre la chaîne sur le display », ou « Recharger » "
                            "pour tout recharger.")
         unload(proj)
     scenes, collections, worlds = analyse(proj)         # toujours relire le fichier choisi
@@ -240,7 +355,7 @@ def load(context, proj, force=False):
         matrix, origin = auto_marker(scene)
         set_marker(proj, matrix)
     placed = 0
-    if part_meshes(proj):
+    if preview_sources(proj):
         placed = len(refresh(context, proj))
     return scene, missing, origin, placed
 
@@ -302,7 +417,7 @@ def unit_factor(proj, context):
 
 def anchor_matrix(proj):
     """Point du bijou posé sur le repère : centre ou haut de sa boîte englobante (axes du monde)."""
-    b = world_bounds([o for o, r in part_meshes(proj)])
+    b = world_bounds([o for o, r in preview_sources(proj)])
     if b is None:
         return Matrix.Identity(4)
     lo, hi = b
@@ -347,7 +462,11 @@ def _preview_material(proj, mat):
 
 
 def preview_signature(proj):
-    return hash_strings([parts_signature(proj), proj.preview_anchor])
+    parts = [proj.preview_anchor]
+    for obj, role in preview_sources(proj):
+        parts.append(role)
+        parts.extend(object_signature(obj))
+    return hash_strings(parts)
 
 
 def refresh(context, proj):
@@ -356,9 +475,12 @@ def refresh(context, proj):
         raise McsError("Chargez d'abord le display.")
     if proj.preview_marker is None:
         set_marker(proj, auto_marker(proj.preview_scene)[0])
-    comps = part_meshes(proj)
+    comps = preview_sources(proj)
     if not comps:
-        raise McsError("Aucun composant de bijou à placer.")
+        raise McsError(NOTHING_TO_PLACE)
+    for obj, role in comps:
+        if obj.mode == "EDIT":
+            obj.update_from_editmode()      # le maillage copié = ce que vous voyez en Edit Mode
     for obj in preview_objects(proj, "copy"):
         _remove_obj(obj)
     coll = _preview_collection(proj)
@@ -435,7 +557,7 @@ def render(context, proj):
     if cam is None or cam.name not in scene.objects:
         raise McsError("Choisissez une caméra de la scène d'aperçu.")
     if not preview_objects(proj, "copy"):
-        raise McsError("Placez d'abord le bijou sur le display.")
+        raise McsError("Cliquez d'abord « Mettre la chaîne sur le display ».")
     out_dir = abspath(proj.render_dir)
     if not out_dir or (proj.render_dir.startswith("//") and not bpy.data.filepath):
         raise McsError("Enregistrez le .blend ou choisissez un dossier de sortie absolu.")
@@ -516,7 +638,8 @@ class MIO_OT_display_load(bpy.types.Operator):
         msg = f"Display chargé (« {scene.name} »), repère : {origin}."
         if proj.display_textures_note:
             msg += " " + proj.display_textures_note
-        msg += f" Bijou placé ({placed} pièce(s))." if placed else " Désignez le bijou (étape 2) puis « Actualiser le bijou »."
+        msg += (f" Chaîne posée ({placed} pièce(s))." if placed else
+                " Sélectionnez votre chaîne dans le projet puis cliquez « Mettre la chaîne sur le display ».")
         if missing:
             msg += f" {len(missing)} ressource(s) externe(s) manquante(s) dans le display."
         self.report({"INFO"}, msg)
@@ -571,30 +694,43 @@ class MIO_OT_marker_save(bpy.types.Operator):
 
 class MIO_OT_preview_refresh(bpy.types.Operator):
     bl_idname = "mio_chain.preview_refresh"
-    bl_label = "Actualiser le bijou"
-    bl_description = "Remplace la copie du bijou par l'état actuel du projet, sans recharger le display"
+    bl_label = "Mettre la chaîne sur le display"
+    bl_description = ("Pose une copie de votre chaîne dans la scène du display, sur le repère : le bijou de "
+                      "l'étape 2, sinon les maillages sélectionnés dans la scène du projet. Recliquez pour "
+                      "l'actualiser (le display n'est pas rechargé)")
     bl_options = {"REGISTER", "UNDO"}
+
+    show: bpy.props.BoolProperty(name="Afficher le display", default=True, options={"SKIP_SAVE"})
 
     def execute(self, context):
         proj = get_project(context)
         try:
-            copies = refresh(context, proj)
+            copies = place(context, proj)
         except McsError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        self.report({"INFO"}, f"Aperçu à jour : {len(copies)} copie(s) placée(s) ensemble sur le repère.")
+        if self.show and context.window is not None and context.window.scene != proj.preview_scene:
+            if context.mode != "OBJECT":
+                bpy.ops.object.mode_set(mode="OBJECT")
+            context.window.scene = proj.preview_scene
+        names = ", ".join(c[SRC] for c in copies[:3]) + ("…" if len(copies) > 3 else "")
+        self.report({"INFO"}, f"Chaîne posée sur le display : {len(copies)} pièce(s) ({names}).")
         return {"FINISHED"}
 
 
 class MIO_OT_display_find_textures(bpy.types.Operator):
     bl_idname = "mio_chain.display_find_textures"
     bl_label = "Rechercher les textures manquantes…"
-    bl_description = ("Choisissez votre dossier de textures : Blender y cherche (sous-dossiers compris) les fichiers "
-                      "manquants par leur nom (Fichier ▸ Données externes ▸ Rechercher les fichiers manquants)")
+    bl_description = ("Choisissez le dossier de vos textures (ou n'importe quel fichier dedans) : Blender y cherche, "
+                      "sous-dossiers compris, les fichiers manquants portant le même nom")
     bl_options = {"REGISTER", "UNDO"}
 
-    directory: bpy.props.StringProperty(subtype="DIR_PATH")
+    directory: bpy.props.StringProperty(subtype="DIR_PATH", options={"SKIP_SAVE"})
+    filepath: bpy.props.StringProperty(subtype="FILE_PATH", options={"HIDDEN", "SKIP_SAVE"})
+    # Le sélecteur montre les dossiers ET les images (DDS compris), pour reconnaître le bon dossier.
     filter_folder: bpy.props.BoolProperty(default=True, options={"HIDDEN"})
+    filter_image: bpy.props.BoolProperty(default=True, options={"HIDDEN"})
+    filter_glob: bpy.props.StringProperty(default=IMAGE_GLOB, options={"HIDDEN"})
 
     def invoke(self, context, event):
         context.window_manager.fileselect_add(self)
@@ -602,29 +738,92 @@ class MIO_OT_display_find_textures(bpy.types.Operator):
 
     def execute(self, context):
         proj = get_project(context)
-        folder = abspath(self.directory)
-        if not os.path.isdir(folder):
+        folder = abspath(self.directory) if self.directory else os.path.dirname(abspath(self.filepath))
+        if not folder or not os.path.isdir(folder):
             self.report({"ERROR"}, f"Dossier introuvable : {folder}")
             return {"CANCELLED"}
-        before = len(missing_display_images(proj))
-        bpy.ops.file.find_missing_files(directory=folder + os.sep)
+        before = len(missing_image_list(proj))
+        bpy.ops.file.find_missing_files(directory=os.path.join(folder, ""))
         for name in json.loads(proj.display_image_names or "[]"):
             img = bpy.data.images.get(name)
             if img is not None and img.filepath and os.path.exists(abspath(img.filepath)):
                 img.reload()
-        missing = missing_display_images(proj)
-        proj.display_missing = json.dumps(missing)
-        found = before - len(missing)
-        if missing:
-            self.report({"WARNING"}, f"{found} texture(s) retrouvée(s), {len(missing)} encore introuvable(s).")
+        update_missing(proj)
+        left = missing_image_list(proj)
+        found = before - len(left)
+        if left:
+            self.report({"WARNING"}, f"{found} texture(s) retrouvée(s) ; encore introuvable(s) : "
+                                     f"{', '.join(i.name for i in left[:3])}. Aucun fichier de ce nom dans le "
+                                     f"dossier : utilisez « Choisir… » à côté de la texture.")
         else:
             self.report({"INFO"}, f"{found} texture(s) retrouvée(s) : plus aucune texture manquante.")
         return {"FINISHED"}
 
 
+def _nearest_folder(path):
+    """Dossier existant le plus proche d'un chemin introuvable (pour ouvrir le sélecteur au bon endroit)."""
+    folder = os.path.dirname(path)
+    while folder and not os.path.isdir(folder):
+        parent = os.path.dirname(folder)
+        if parent == folder:
+            return ""
+        folder = parent
+    return folder
+
+
+class MIO_OT_display_relink_texture(bpy.types.Operator):
+    bl_idname = "mio_chain.display_relink_texture"
+    bl_label = "Choisir le fichier…"
+    bl_description = ("Indiquez vous-même le fichier de cette texture (DDS, PNG, JPG, TGA…), "
+                      "même s'il porte un autre nom")
+    bl_options = {"REGISTER", "UNDO"}
+
+    image_name: bpy.props.StringProperty(options={"HIDDEN"})
+    filepath: bpy.props.StringProperty(subtype="FILE_PATH", options={"SKIP_SAVE"})
+    filter_folder: bpy.props.BoolProperty(default=True, options={"HIDDEN"})
+    filter_image: bpy.props.BoolProperty(default=True, options={"HIDDEN"})
+    filter_glob: bpy.props.StringProperty(default=IMAGE_GLOB, options={"HIDDEN"})
+
+    def invoke(self, context, event):
+        img = bpy.data.images.get(self.image_name)
+        if img is not None and img.filepath:
+            path = abspath(img.filepath)
+            if os.sep == "/":
+                path = path.replace("\\", "/")
+            folder = _nearest_folder(path)
+            if folder:
+                self.filepath = os.path.join(folder, os.path.basename(path))
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        proj = get_project(context)
+        img = bpy.data.images.get(self.image_name)
+        if img is None:
+            self.report({"ERROR"}, f"Texture « {self.image_name} » absente du fichier.")
+            return {"CANCELLED"}
+        path = abspath(self.filepath)
+        if not os.path.isfile(path):
+            self.report({"ERROR"}, f"Fichier introuvable : {path}")
+            return {"CANCELLED"}
+        if not path.lower().endswith(IMAGE_EXTS):
+            self.report({"ERROR"}, "Choisissez un fichier image (DDS, PNG, JPG, TGA, TIF…).")
+            return {"CANCELLED"}
+        img.filepath = path
+        img.reload()
+        update_missing(proj)
+        readable = img.size[0] > 0 and img.size[1] > 0
+        if not readable:
+            self.report({"WARNING"}, f"{img.name} relié à {os.path.basename(path)}, mais Blender n'arrive pas à "
+                                     f"lire ce fichier : il apparaîtra rose au rendu.")
+        else:
+            self.report({"INFO"}, f"{img.name} → {os.path.basename(path)} ({img.size[0]}×{img.size[1]}).")
+        return {"FINISHED"}
+
+
 class MIO_OT_preview_move(bpy.types.Operator):
     bl_idname = "mio_chain.preview_move"
-    bl_label = "Déplacer le bijou"
+    bl_label = "Déplacer la chaîne"
     bl_description = "Ouvre le display et sélectionne le repère qui porte le bijou : déplacez-le avec G, R et S"
 
     def execute(self, context):
@@ -712,4 +911,4 @@ class MIO_OT_render(bpy.types.Operator):
 
 
 CLASSES = (MIO_OT_display_analyse, MIO_OT_display_load, MIO_OT_marker_set, MIO_OT_marker_save,
-           MIO_OT_preview_refresh, MIO_OT_display_find_textures, MIO_OT_preview_move, MIO_OT_view_camera, MIO_OT_back_to_project, MIO_OT_render)
+           MIO_OT_preview_refresh, MIO_OT_display_find_textures, MIO_OT_display_relink_texture, MIO_OT_preview_move, MIO_OT_view_camera, MIO_OT_back_to_project, MIO_OT_render)

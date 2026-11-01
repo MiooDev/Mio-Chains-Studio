@@ -1,4 +1,4 @@
-# Vérifications, limites connues et tests restants (version 0.3.4)
+# Vérifications, limites connues et tests restants (version 0.3.5)
 
 ## Environnement des tests réellement exécutés
 
@@ -9,7 +9,7 @@
 - **Copie testée** : l'addon **installé depuis le ZIP** (`extensions.package_install_files`).
 - **Script** : `tests/run_tests.py`.
 
-**Résultat : 155/155 vérifications réussies.**
+**Résultat : 167/167 vérifications réussies.**
 
 | Point demandé | Vérification exécutée |
 |---|---|
@@ -34,6 +34,8 @@
 | Sauvegarde et réouverture | Structure Teef, mio_chain, composants, réglages et presets conservés ; statut 8 conservé ; actualisation sans doublon |
 | Aperçu simplifié (0.3.1) | Chargement en un clic avec bijou posé automatiquement sur le vide du display ; « Déplacer le bijou » sélectionne le repère dans le display ; position mémorisée ; retour au projet ; rendu rapide |
 | Textures du display (0.3.2) | Chemin relatif au display retrouvé ; texture introuvable reprise du projet (même fichier) ; seule la texture vraiment absente est signalée, puis retrouvée par « Rechercher les textures manquantes » dans un sous-dossier |
+| Mettre la chaîne sur le display (0.3.5) | Sans bijou désigné : la chaîne sélectionnée dans le projet est posée dans la scène du display, qui s'affiche ; rien de sélectionné : refus clair ; actualisation sans sélection : la chaîne mémorisée reste posée ; bijou de l'étape 2 désigné : il redevient la source |
+| Textures du display (0.3.5) | Sélecteurs : dossiers et images affichés (filtre images + `*.dds`, DDS reconnu par Blender) ; « Choisir… » relie une texture à un fichier d'un autre nom et refuse un fichier non image ; un vrai DDS de Teef est relié et lu ; texture présente seulement intégrée (packed) au projet : réutilisée |
 | Exclusion du display | Display chargé dans une scène séparée ; aucune erreur d'exclusion ; aucun objet du display dans le YDD |
 | Dépendances | Dossier Teef incomplet ou absent refusé ; Sollumz désactivé : export refusé et panneaux sans erreur |
 | Statut en erreur (0.3.3) | Si le calcul d'un statut échoue, tous les panneaux restent dessinés et l'erreur s'affiche dans le panneau concerné |
@@ -44,7 +46,7 @@
 
 - **Annuler (`Ctrl+Z`)** : les opérateurs déclarent l'option UNDO, mais la pile d'annulation de Blender est désactivée en mode sans interface (`ed.undo` refuse le contexte). À tester dans Blender.
 - **Interface graphique réelle sous Windows** :
-  - rendu visuel des panneaux, sélecteurs de fichiers ;
+  - rendu visuel des panneaux, sélecteurs de fichiers (l'affichage réel des `.dds` dans le sélecteur n'est vérifié que par ses réglages) ;
   - confirmations (remplacement de preset, peinture existante, suppression) et recherches (presets, shaders) ;
   - « Voir par la caméra » dans une vraie vue 3D ;
   - `Ctrl + X` en Vertex Paint avec votre propre keymap.
