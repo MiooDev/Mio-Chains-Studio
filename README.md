@@ -6,12 +6,12 @@ Addon Blender pour préparer **vos propres pendentifs et chaînes FiveM** avec *
 |---|---|
 | Blender | **5.2** (vérifié avec 5.2.3 LTS) |
 | Sollumz | **2.9.0** (dernière version publiée, vérifiée) avec sa dépendance `szio` |
-| Addon | 0.3.2 |
+| Addon | 0.3.3 |
 
 ## Installation
 
 1. Installez et activez **Sollumz 2.9.0** et ses dépendances (préférences de Sollumz → *Install dependencies*).
-2. Blender → **Édition → Préférences → Extensions** → menu **⌄** → **Installer depuis le disque…** → `dist/mio_chain_studio-0.3.2.zip`.
+2. Blender → **Édition → Préférences → Extensions** → menu **⌄** → **Installer depuis le disque…** → `dist/mio_chain_studio-0.3.3.zip`.
 3. Extrayez **Teef.zip** en conservant son arborescence :
    ```
    Teef/

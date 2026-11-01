@@ -1,4 +1,4 @@
-# Vérifications, limites connues et tests restants (version 0.3.2)
+# Vérifications, limites connues et tests restants (version 0.3.3)
 
 ## Environnement des tests réellement exécutés
 
@@ -9,7 +9,7 @@
 - **Copie testée** : l'addon **installé depuis le ZIP** (`extensions.package_install_files`).
 - **Script** : `tests/run_tests.py`.
 
-**Résultat : 149/149 vérifications réussies.**
+**Résultat : 150/150 vérifications réussies.**
 
 | Point demandé | Vérification exécutée |
 |---|---|
@@ -36,6 +36,7 @@
 | Textures du display (0.3.2) | Chemin relatif au display retrouvé ; texture introuvable reprise du projet (même fichier) ; seule la texture vraiment absente est signalée, puis retrouvée par « Rechercher les textures manquantes » dans un sous-dossier |
 | Exclusion du display | Display chargé dans une scène séparée ; aucune erreur d'exclusion ; aucun objet du display dans le YDD |
 | Dépendances | Dossier Teef incomplet ou absent refusé ; Sollumz désactivé : export refusé et panneaux sans erreur |
+| Statut en erreur (0.3.3) | Si le calcul d'un statut échoue, tous les panneaux restent dessinés et l'erreur s'affiche dans le panneau concerné |
 | Interface | Le code de dessin de tous les panneaux a été exécuté (noms de propriétés et d'opérateurs validés), y compris sans Sollumz |
 
 ## Non testé (vérification du code seulement)

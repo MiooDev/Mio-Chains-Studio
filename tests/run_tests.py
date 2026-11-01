@@ -699,6 +699,17 @@ def main():
 
     errs = draw_all_panels()
     check("Dessin de tous les panneaux", not errs, errs)
+    real_step2 = status.STEPS[1]
+    status.STEPS = tuple((k, l, (lambda c, pr: 1 / 0) if k == "2" else f) for k, l, f in status.STEPS)
+    status.invalidate()
+    try:
+        st2, issues2 = status.compute(bpy.context, p, "2")
+        errs = draw_all_panels()
+    finally:
+        status.STEPS = tuple(real_step2 if k == "2" else (k, l, f) for k, l, f in status.STEPS)
+        status.invalidate()
+    check("Statut en erreur : panneaux toujours dessinés, erreur affichée", not errs and st2 == "À vérifier"
+          and "Erreur interne" in issues2[0][1], (errs, issues2))
 
     # Sauvegarde et réouverture -----------------------------------------------------------
     print("\n[S] Sauvegarde et réouverture")

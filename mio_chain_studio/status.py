@@ -210,8 +210,19 @@ STEPS = (
 )
 
 
+def _safe(fn, context, proj):
+    """Un statut qui échoue ne doit jamais casser l'affichage : l'erreur est montrée dans le panneau."""
+    try:
+        return fn(context, proj)
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return STATUS_CHECK, [("ERROR", f"Erreur interne pendant le calcul du statut : {type(exc).__name__} : {exc}",
+                               "Fenêtre ▸ Afficher la console système, puis envoyez le message rouge.")]
+
+
 def compute(context, proj, key):
     for k, label, fn in STEPS:
         if k == key:
-            return cached(f"step_{k}", lambda: fn(context, proj))
+            return cached(f"step_{k}", lambda: _safe(fn, context, proj))
     raise KeyError(key)
