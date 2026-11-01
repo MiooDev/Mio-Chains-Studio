@@ -729,6 +729,38 @@ def main():
     errs = draw_all_panels()
     check("Panneaux après réouverture", not errs, errs)
 
+    print("\n[C] Cohabitation avec un autre addon")
+    import importlib
+    pkg = importlib.import_module("bl_ext.user_default.mio_chain_studio")
+    from bl_ext.user_default.mio_chain_studio import ui as ui_mod
+    check("Aucun conflit en temps normal", pkg.check_conflicts() == [], pkg.check_conflicts())
+    foreign = []
+
+    class MIO_PG_step(bpy.types.PropertyGroup):
+        pass
+    foreign.append(MIO_PG_step)
+    for ident in ["MIO_PT_main"] + [f"MIO_PT_step{i}" for i in range(1, 7)]:
+        foreign.append(type(ident, (bpy.types.Panel,), {"bl_idname": ident, "bl_label": ident, "bl_space_type": "VIEW_3D",
+                                                       "bl_region_type": "UI", "bl_category": "Autre",
+                                                       "draw": lambda self, context: None}))
+    for cls in foreign:
+        bpy.utils.register_class(cls)
+    ours = all(getattr(bpy.types, c.bl_idname if hasattr(c, "bl_idname") else c.__name__, None) is c
+               for c in ui_mod.CLASSES)
+    check("Autre addon en MIO_PT_* / MIO_PG_step : panneaux Mio Chain intacts", ours and pkg.check_conflicts() == [])
+    clash = type("MCS_PT_step1", (bpy.types.Panel,), {"bl_idname": "MCS_PT_step1", "bl_label": "x", "bl_space_type": "VIEW_3D",
+                                                     "bl_region_type": "UI", "draw": lambda self, context: None})
+    bpy.utils.register_class(clash)
+    found = pkg.check_conflicts()
+    check("Conflit réel détecté et signalé", any(c.startswith("MCS_PT_step1") for c in found), found)
+    errs = draw_all_panels()
+    check("Panneau principal dessiné avec l'alerte de conflit", not errs, errs)
+    bpy.utils.unregister_class(clash)
+    bpy.utils.register_class(ui_mod.MCS_PT_step1)
+    for cls in reversed(foreign):
+        bpy.utils.unregister_class(cls)
+    check("Retour à la normale", pkg.check_conflicts() == [], pkg.check_conflicts())
+
     print("\n[D] Dépendances")
     bpy.ops.preferences.addon_disable(module=SOLLUMZ)
     szb.detect(refresh=True)

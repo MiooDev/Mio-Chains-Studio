@@ -69,13 +69,26 @@ class _Base:
         draw_issues(self.layout, context, issues)
 
 
-class MIO_PT_main(_Base, bpy.types.Panel):
+class MCS_PT_main(_Base, bpy.types.Panel):
     bl_label = "Mio Chain Studio"
-    bl_idname = "MIO_PT_main"
+    bl_idname = "MCS_PT_main"
 
     def draw(self, context):
         layout = self.layout
         proj = get_project(context)
+        from . import check_conflicts
+        conflicts = status.cached("conflicts", check_conflicts)
+        if conflicts:
+            box = layout.box()
+            box.alert = True
+            box.label(text="Conflit avec un autre addon", icon="ERROR")
+            draw_wrapped(box, context, "Un autre addon utilise les mêmes identifiants et remplace une partie de "
+                                       "Mio Chain Studio. Désactivez-le (Préférences ▸ Extensions / Add-ons), "
+                                       "puis redémarrez Blender.")
+            modules = sorted({c.split("→")[-1].strip() for c in conflicts})
+            draw_wrapped(box, context, "Addon(s) en cause : " + ", ".join(modules))
+            for c in conflicts[:5]:
+                box.label(text=c)
         if context.scene != project_scene(context):
             box = layout.box()
             box.label(text="Vous êtes dans la scène d'aperçu.", icon="SCENE_DATA")
@@ -102,9 +115,9 @@ class MIO_PT_main(_Base, bpy.types.Panel):
             col.label(text=(f"{key}. " if key.isdigit() else "") + f"{label} — {st}", icon=STATUS_ICONS[st])
 
 
-class MIO_PT_step1(_Base, bpy.types.Panel):
+class MCS_PT_step1(_Base, bpy.types.Panel):
     bl_label = "1. Préparation des SVG"
-    bl_idname = "MIO_PT_step1"
+    bl_idname = "MCS_PT_step1"
     bl_options = {"DEFAULT_CLOSED"}
     step = "1"
 
@@ -147,9 +160,9 @@ class MIO_PT_step1(_Base, bpy.types.Panel):
         sub.prop(proj, "height_tolerance")
 
 
-class MIO_PT_step2(_Base, bpy.types.Panel):
+class MCS_PT_step2(_Base, bpy.types.Panel):
     bl_label = "2. Chaîne et composants"
-    bl_idname = "MIO_PT_step2"
+    bl_idname = "MCS_PT_step2"
     bl_options = {"DEFAULT_CLOSED"}
     step = "2"
 
@@ -181,9 +194,9 @@ class MIO_PT_step2(_Base, bpy.types.Panel):
             r.operator("mio_chain.part_remove", text="", icon="X").index = i
 
 
-class MIO_PT_step3(_Base, bpy.types.Panel):
+class MCS_PT_step3(_Base, bpy.types.Panel):
     bl_label = "3. Matériaux sur les faces sélectionnées"
-    bl_idname = "MIO_PT_step3"
+    bl_idname = "MCS_PT_step3"
     bl_options = {"DEFAULT_CLOSED"}
     step = "3"
 
@@ -237,9 +250,9 @@ class MIO_PT_step3(_Base, bpy.types.Panel):
         sub.prop(proj, "shader_emissive")
 
 
-class MIO_PT_step4(_Base, bpy.types.Panel):
+class MCS_PT_step4(_Base, bpy.types.Panel):
     bl_label = "4. Value Parameters et presets"
-    bl_idname = "MIO_PT_step4"
+    bl_idname = "MCS_PT_step4"
     bl_options = {"DEFAULT_CLOSED"}
     step = "4"
 
@@ -298,9 +311,9 @@ class MIO_PT_step4(_Base, bpy.types.Panel):
         box.operator("mio_chain.preset_save", icon="FILE_TICK")
 
 
-class MIO_PT_step5(_Base, bpy.types.Panel):
+class MCS_PT_step5(_Base, bpy.types.Panel):
     bl_label = "5. Color Attributes"
-    bl_idname = "MIO_PT_step5"
+    bl_idname = "MCS_PT_step5"
     bl_options = {"DEFAULT_CLOSED"}
     step = "5"
 
@@ -317,9 +330,9 @@ class MIO_PT_step5(_Base, bpy.types.Panel):
         r.operator("mio_chain.colors_configure", icon="COLOR")
 
 
-class MIO_PT_step6(_Base, bpy.types.Panel):
+class MCS_PT_step6(_Base, bpy.types.Panel):
     bl_label = "6. Note pour le glow"
-    bl_idname = "MIO_PT_step6"
+    bl_idname = "MCS_PT_step6"
     bl_options = {"DEFAULT_CLOSED"}
     step = "6"
 
@@ -342,9 +355,9 @@ class MIO_PT_step6(_Base, bpy.types.Panel):
             layout.label(text="Choisissez « Ped Emissive » à l'étape 3 pour afficher le rappel.")
 
 
-class MIO_PT_step7(_Base, bpy.types.Panel):
+class MCS_PT_step7(_Base, bpy.types.Panel):
     bl_label = "7. Rigging sur SKEL_Spine3"
-    bl_idname = "MIO_PT_step7"
+    bl_idname = "MCS_PT_step7"
     bl_options = {"DEFAULT_CLOSED"}
     step = "7"
 
@@ -369,9 +382,9 @@ class MIO_PT_step7(_Base, bpy.types.Panel):
             layout.operator("mio_chain.weight_paint", icon="WPAINT_HLT")
 
 
-class MIO_PT_step8(_Base, bpy.types.Panel):
+class MCS_PT_step8(_Base, bpy.types.Panel):
     bl_label = "8. Structure d'export et export"
-    bl_idname = "MIO_PT_step8"
+    bl_idname = "MCS_PT_step8"
     bl_options = {"DEFAULT_CLOSED"}
     step = "8"
 
@@ -435,9 +448,9 @@ class MIO_PT_step8(_Base, bpy.types.Panel):
         draw_wrapped(layout, context, "Un export Blender réussi ne valide pas le bijou dans FiveM.", icon="ERROR")
 
 
-class MIO_PT_display(_Base, bpy.types.Panel):
+class MCS_PT_display(_Base, bpy.types.Panel):
     bl_label = "Aperçu sur mon display"
-    bl_idname = "MIO_PT_display"
+    bl_idname = "MCS_PT_display"
     bl_options = {"DEFAULT_CLOSED"}
     step = "A"
 
@@ -482,9 +495,9 @@ class MIO_PT_display(_Base, bpy.types.Panel):
                 draw_wrapped(layout, context, msg + (f" → {fix}" if fix else ""), icon=SEVERITY_ICONS[sev])
 
 
-class MIO_PT_display_options(_Base, bpy.types.Panel):
+class MCS_PT_display_options(_Base, bpy.types.Panel):
     bl_label = "Options"
-    bl_parent_id = "MIO_PT_display"
+    bl_parent_id = "MCS_PT_display"
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
@@ -523,5 +536,5 @@ class MIO_PT_display_options(_Base, bpy.types.Panel):
         box.prop(proj, "quick_samples")
 
 
-CLASSES = (MIO_PT_main, MIO_PT_step1, MIO_PT_step2, MIO_PT_step3, MIO_PT_step4, MIO_PT_step5, MIO_PT_step6,
-           MIO_PT_step7, MIO_PT_step8, MIO_PT_display, MIO_PT_display_options)
+CLASSES = (MCS_PT_main, MCS_PT_step1, MCS_PT_step2, MCS_PT_step3, MCS_PT_step4, MCS_PT_step5, MCS_PT_step6,
+           MCS_PT_step7, MCS_PT_step8, MCS_PT_display, MCS_PT_display_options)

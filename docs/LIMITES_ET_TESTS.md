@@ -1,4 +1,4 @@
-# Vérifications, limites connues et tests restants (version 0.3.3)
+# Vérifications, limites connues et tests restants (version 0.3.4)
 
 ## Environnement des tests réellement exécutés
 
@@ -9,7 +9,7 @@
 - **Copie testée** : l'addon **installé depuis le ZIP** (`extensions.package_install_files`).
 - **Script** : `tests/run_tests.py`.
 
-**Résultat : 150/150 vérifications réussies.**
+**Résultat : 155/155 vérifications réussies.**
 
 | Point demandé | Vérification exécutée |
 |---|---|
@@ -37,6 +37,7 @@
 | Exclusion du display | Display chargé dans une scène séparée ; aucune erreur d'exclusion ; aucun objet du display dans le YDD |
 | Dépendances | Dossier Teef incomplet ou absent refusé ; Sollumz désactivé : export refusé et panneaux sans erreur |
 | Statut en erreur (0.3.3) | Si le calcul d'un statut échoue, tous les panneaux restent dessinés et l'erreur s'affiche dans le panneau concerné |
+| Cohabitation avec d'autres addons (0.3.4) | Panneaux renommés `MCS_PT_…` : un autre addon qui utilise `MIO_PT_main`, `MIO_PT_step1…6` ou `MIO_PG_step` ne les remplace plus ; un vrai conflit d'identifiant est détecté et affiché dans le panneau principal |
 | Interface | Le code de dessin de tous les panneaux a été exécuté (noms de propriétés et d'opérateurs validés), y compris sans Sollumz |
 
 ## Non testé (vérification du code seulement)
