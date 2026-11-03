@@ -493,10 +493,21 @@ class MCS_PT_display(_Base, bpy.types.Panel):
         col.operator("mio_chain.preview_move", text="3. Déplacer la chaîne (G / R / S)", icon="OBJECT_ORIGIN")
         col.operator("mio_chain.marker_save", icon="PINNED")
         col.operator("mio_chain.view_camera", text="4. Voir par la caméra", icon="CAMERA_DATA")
+        layout.prop(proj, "render_closeup", toggle=True, icon="ZOOM_IN")
+        if placed and not proj.render_closeup:
+            est = status.cached("disp_detail", lambda: display.detail_estimate(proj, proj.render_camera))
+            if est is not None:
+                text, enough = display.detail_message(est)
+                draw_wrapped(layout, context, text, icon="CHECKMARK" if enough else "ERROR")
+        elif placed:
+            draw_wrapped(layout, context, "Gros plan : le rendu est cadré automatiquement sur la chaîne, sous l'angle "
+                                          "de la caméra du display.", icon="INFO")
         row = layout.row(align=True)
         row.scale_y = 1.3
         row.operator("mio_chain.render", text="Rendu rapide", icon="RENDER_STILL").mode = "QUICK"
         row.operator("mio_chain.render", text="Rendu final", icon="RENDER_RESULT").mode = "FINAL"
+        if proj.render_note:
+            draw_wrapped(layout, context, "Dernier rendu — " + proj.render_note, icon="IMAGE_DATA")
         if context.scene != project_scene(context):
             layout.operator("mio_chain.back_to_project", icon="LOOP_BACK")
         if proj.display_textures_note:

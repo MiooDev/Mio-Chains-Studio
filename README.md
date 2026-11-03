@@ -136,6 +136,12 @@ Section séparée et facultative, en quatre gestes :
 3. **Déplacer la chaîne (G / R / S)** ouvre le display et sélectionne le repère qui porte la chaîne. **Mémoriser cette position** la garde pour les prochains projets.
 4. **Voir par la caméra**, puis **Rendu rapide** ou **Rendu final**. **Revenir au projet** vous ramène à votre scène.
 
+**Diamants, paillettes et petits détails** : sur l'image, une texture fine n'apparaît que si la chaîne est assez grande. Le panneau affiche la taille de la chaîne sur l'image (en pixels et en pixels par centimètre) :
+- en dessous d'environ 30 px par cm, un diamant de 1 mm fait moins de 3 px et disparaît, même si la texture est bien là ;
+- **Gros plan sur la chaîne** cadre alors automatiquement le rendu sur la chaîne, sous l'angle de la caméra du display (la caméra du display n'est pas modifiée) ;
+- **Rendu rapide** garde la résolution choisie et réduit seulement le nombre d'échantillons ;
+- si le display limite la taille des textures (Simplify ▸ Texture Limit de Cycles), l'addon le signale après le rendu.
+
 **Textures du display** : si une texture du display est introuvable (fichier déplacé, chemin relatif cassé), l'addon reprend la même texture de votre projet (même nom de fichier, ou même nom de texture, y compris une texture intégrée au projet). Pour celles qui restent :
 - **Choisir…**, à côté de chaque texture manquante, vous laisse indiquer le fichier vous-même, même s'il porte un autre nom ;
 - **Rechercher les textures manquantes…** vous laisse choisir votre dossier de textures ; Blender y cherche les fichiers du même nom, sous-dossiers compris.

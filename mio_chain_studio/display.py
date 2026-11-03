@@ -149,8 +149,11 @@ def place(context, proj):
 def _remove_obj(obj):
     data = obj.data
     bpy.data.objects.remove(obj, do_unlink=True)
-    if data is not None and data.users == 0 and isinstance(data, bpy.types.Mesh):
-        bpy.data.meshes.remove(data)
+    if data is not None and data.users == 0:
+        if isinstance(data, bpy.types.Mesh):
+            bpy.data.meshes.remove(data)
+        elif isinstance(data, bpy.types.Camera):
+            bpy.data.cameras.remove(data)
 
 
 def unload(proj):
@@ -540,6 +543,120 @@ def refresh(context, proj):
 # Rendu
 # ---------------------------------------------------------------------------
 
+CLOSEUP_MARGIN = 1.3        # la chaîne occupe environ 1/1,3 du cadre en gros plan
+DETAIL_MIN_PX_CM = 30       # en dessous, un diamant de 1 mm fait moins de 3 px : invisible
+
+
+def _copies_corners(proj):
+    pts = []
+    for c in preview_objects(proj, "copy"):
+        pts += [c.matrix_world @ Vector(v) for v in c.bound_box]
+    return pts
+
+
+def _render_size(proj):
+    f = proj.render_percent / 100
+    return max(1, round(proj.render_res_x * f)), max(1, round(proj.render_res_y * f))
+
+
+def closeup_camera(proj):
+    """Caméra « gros plan » : même angle et même objectif que la caméra du display, recadrée sur la chaîne.
+
+    Créée dans la scène d'aperçu (jamais exportée) et recadrée à chaque utilisation ; la caméra du display
+    n'est pas modifiée.
+    """
+    scene = proj.preview_scene
+    base = proj.render_camera
+    if scene is None:
+        raise McsError("Chargez d'abord le display.")
+    if base is None or base.type != "CAMERA" or base.name not in scene.objects:
+        raise McsError("Choisissez une caméra de la scène d'aperçu (Options ▸ Rendu).")
+    view_layer = scene.view_layers[0]
+    view_layer.update()
+    pts = _copies_corners(proj)
+    if not pts:
+        raise McsError("Cliquez d'abord « Mettre la chaîne sur le display ».")
+    cam = next(iter(preview_objects(proj, "closeup")), None)
+    data = base.data.copy()
+    data.name = "MCS_Gros_Plan"
+    if cam is None:
+        cam = bpy.data.objects.new("MCS_Camera_Gros_Plan", data)
+        tag(cam, proj, role="apercu", **{TAG_PREVIEW: 1, KIND: "closeup"})
+        _preview_collection(proj).objects.link(cam)
+    else:
+        old = cam.data
+        cam.data = data
+        if old is not None and old.users == 0:
+            bpy.data.cameras.remove(old)
+    cam.parent = None
+    loc, rot, _scale = base.matrix_world.decompose()
+    cam.matrix_world = Matrix.LocRotScale(loc, rot, Vector((1.0, 1.0, 1.0)))
+    center = sum(pts, Vector()) / len(pts)
+    fit = [center + (p - center) * CLOSEUP_MARGIN for p in pts]
+    r = scene.render
+    saved = r.resolution_x, r.resolution_y, r.resolution_percentage
+    try:
+        r.resolution_x, r.resolution_y, r.resolution_percentage = proj.render_res_x, proj.render_res_y, 100
+        view_layer.update()
+        co, ortho_scale = cam.camera_fit_coords(view_layer.depsgraph, [v for p in fit for v in p])
+    finally:
+        r.resolution_x, r.resolution_y, r.resolution_percentage = saved
+    cam.location = co
+    if data.type == "ORTHO":
+        data.ortho_scale = ortho_scale
+    dist = (center - Vector(co)).length
+    data.clip_start = min(data.clip_start, max(dist * 0.05, 1e-4))
+    data.dof.focus_object = None
+    data.dof.focus_distance = dist
+    view_layer.update()
+    return cam
+
+
+def detail_estimate(proj, cam):
+    """Taille de la chaîne sur l'image : (largeur px, hauteur px, px par cm) ou None. Lecture seule."""
+    scene = proj.preview_scene
+    if scene is None or cam is None or cam.type != "CAMERA":
+        return None
+    pts = _copies_corners(proj)
+    if not pts:
+        return None
+    rx, ry = _render_size(proj)
+    pm = cam.calc_matrix_camera(scene.view_layers[0].depsgraph, x=rx, y=ry)
+    view = cam.matrix_world.inverted()
+    xs, ys = [], []
+    for p in pts:
+        v = pm @ (view @ p).to_4d()
+        if v.w > 1e-9:
+            xs.append((v.x / v.w + 1) / 2 * rx)
+            ys.append((v.y / v.w + 1) / 2 * ry)
+    if not xs:
+        return None
+    w = max(0.0, min(max(xs), rx) - max(min(xs), 0))
+    h = max(0.0, min(max(ys), ry) - max(min(ys), 0))
+    lo = Vector([min(p[i] for p in pts) for i in range(3)])
+    hi = Vector([max(p[i] for p in pts) for i in range(3)])
+    extent_cm = max(hi - lo) * scene.unit_settings.scale_length * 100
+    return w, h, (max(w, h) / extent_cm if extent_cm > 1e-9 else 0.0)
+
+
+def detail_message(est):
+    """(texte, assez de détail ?) pour une estimation detail_estimate."""
+    w, h, ppc = est
+    text = f"Chaîne sur l'image : environ {w:.0f} × {h:.0f} px ({ppc:.0f} px par cm)."
+    if ppc < DETAIL_MIN_PX_CM:
+        return (text + " Trop petit pour voir les diamants et paillettes : activez « Gros plan sur la chaîne » "
+                       "ou augmentez la résolution."), False
+    return text, True
+
+
+def texture_limit(scene):
+    """Limite de taille des textures imposée par le display (Simplify de Cycles), sinon None."""
+    if scene.render.use_simplify and scene.render.engine == "CYCLES":
+        limit = getattr(getattr(scene, "cycles", None), "texture_limit_render", "OFF")
+        if limit and limit != "OFF":
+            return limit
+    return None
+
 def _samples_setting(scene):
     if scene.render.engine == "CYCLES":
         return scene.cycles, "samples"
@@ -558,6 +675,8 @@ def render(context, proj):
         raise McsError("Choisissez une caméra de la scène d'aperçu.")
     if not preview_objects(proj, "copy"):
         raise McsError("Cliquez d'abord « Mettre la chaîne sur le display ».")
+    if proj.render_closeup:
+        cam = closeup_camera(proj)
     out_dir = abspath(proj.render_dir)
     if not out_dir or (proj.render_dir.startswith("//") and not bpy.data.filepath):
         raise McsError("Enregistrez le .blend ou choisissez un dossier de sortie absolu.")
@@ -569,15 +688,18 @@ def render(context, proj):
     saved_samples = getattr(owner, attr) if owner else None
     stamp = time.strftime("%Y%m%d_%H%M%S")
     mode = "rapide" if proj.render_mode == "QUICK" else "final"
-    target = os.path.join(out_dir, f"{proj.output_name.strip().replace('^', '_') or 'bijou'}_{mode}_{stamp}")
+    if proj.render_closeup:
+        mode += "_gros_plan"
+    base_name = f"{proj.output_name.strip().replace('^', '_') or 'bijou'}_{mode}_{stamp}"
+    target, n = os.path.join(out_dir, base_name), 2
+    while os.path.exists(target + ".png"):          # deux rendus dans la même seconde : aucun écrasement
+        target, n = os.path.join(out_dir, f"{base_name}_{n}"), n + 1
     try:
         scene.camera = cam
         r.resolution_x, r.resolution_y = proj.render_res_x, proj.render_res_y
-        r.resolution_percentage = proj.render_percent
-        if proj.render_mode == "QUICK":
-            r.resolution_percentage = max(1, proj.render_percent // 2)
-            if owner:
-                setattr(owner, attr, proj.quick_samples)
+        r.resolution_percentage = proj.render_percent       # même résolution en rapide : détails visibles
+        if proj.render_mode == "QUICK" and owner:
+            setattr(owner, attr, proj.quick_samples)
         r.image_settings.file_format = "PNG"
         r.filepath = target
         bpy.ops.render.render(write_still=True, scene=scene.name)
@@ -591,7 +713,18 @@ def render(context, proj):
     out = target + ".png"
     if not os.path.isfile(out) or os.path.getsize(out) == 0:
         raise McsError(f"Le rendu n'a pas produit de fichier : {out}")
-    return out
+    notes, enough = [], True
+    est = detail_estimate(proj, cam)
+    if est is not None:
+        text, enough = detail_message(est)
+        notes.append(("Gros plan. " if proj.render_closeup else "") + text)
+    limit = texture_limit(scene)
+    if limit:
+        enough = False
+        notes.append(f"Le display limite les textures à {limit} px (Propriétés de rendu ▸ Simplify ▸ "
+                     f"Texture Limit) : les détails fins sont réduits.")
+    proj.render_note = " ".join(notes)
+    return out, enough
 
 
 # ---------------------------------------------------------------------------
@@ -850,7 +983,8 @@ class MIO_OT_preview_move(bpy.types.Operator):
 class MIO_OT_view_camera(bpy.types.Operator):
     bl_idname = "mio_chain.view_camera"
     bl_label = "Voir par la caméra"
-    bl_description = "Ouvre la scène d'aperçu et regarde par la caméra choisie"
+    bl_description = ("Ouvre la scène d'aperçu et regarde par la caméra choisie (ou par le gros plan, "
+                      "s'il est activé)")
 
     def execute(self, context):
         proj = get_project(context)
@@ -861,6 +995,12 @@ class MIO_OT_view_camera(bpy.types.Operator):
         if context.window is None:
             self.report({"ERROR"}, "Aucune fenêtre Blender (mode sans interface).")
             return {"CANCELLED"}
+        if proj.render_closeup:
+            try:
+                cam = closeup_camera(proj)
+            except McsError as exc:
+                self.report({"ERROR"}, str(exc))
+                return {"CANCELLED"}
         context.window.scene = scene
         scene.camera = cam
         done = False
@@ -887,7 +1027,8 @@ class MIO_OT_back_to_project(bpy.types.Operator):
 class MIO_OT_render(bpy.types.Operator):
     bl_idname = "mio_chain.render"
     bl_label = "Lancer le rendu"
-    bl_description = "Rend la scène d'aperçu avec la caméra du display et enregistre l'image (Blender est occupé pendant le rendu)"
+    bl_description = ("Rend la scène d'aperçu avec la caméra du display (ou en gros plan sur la chaîne) et "
+                      "enregistre l'image (Blender est occupé pendant le rendu)")
 
     mode: bpy.props.EnumProperty(items=[("CURRENT", "Réglage actuel", ""), ("QUICK", "Rapide", ""),
                                         ("FINAL", "Final", "")], default="CURRENT", options={"HIDDEN", "SKIP_SAVE"})
@@ -897,16 +1038,17 @@ class MIO_OT_render(bpy.types.Operator):
         if self.mode != "CURRENT":
             proj.render_mode = self.mode
         try:
-            out = render(context, proj)
+            out, enough = render(context, proj)
         except McsError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
         stale = proj.preview_signature != preview_signature(proj)
         msg = f"Rendu enregistré : {out}"
         if stale:
-            self.report({"WARNING"}, msg + " (aperçu périmé : actualisez-le avant le rendu final).")
-        else:
-            self.report({"INFO"}, msg)
+            msg += " (aperçu périmé : actualisez la chaîne sur le display avant le rendu final)."
+        if proj.render_note:
+            msg += " " + proj.render_note
+        self.report({"WARNING"} if stale or not enough else {"INFO"}, msg)
         return {"FINISHED"}
 
 

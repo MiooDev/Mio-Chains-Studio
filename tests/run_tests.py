@@ -763,6 +763,55 @@ def main():
     p.render_dir = os.path.join(WORK, "rendus")
     check("Rendu rapide", run("render", mode="QUICK") == {"FINISHED"} and any(f.endswith(".png") for f in os.listdir(p.render_dir)))
     check("Réglages du display restaurés", ps.cycles.samples == 128)
+    last = max((f for f in os.listdir(p.render_dir) if f.endswith(".png")),
+               key=lambda f: os.path.getmtime(os.path.join(p.render_dir, f)))
+    shot = bpy.data.images.load(os.path.join(p.render_dir, last))
+    check("Rendu rapide à la résolution complète (petits détails conservés)", tuple(shot.size) == (64, 48),
+          tuple(shot.size))
+    bpy.data.images.remove(shot)
+    base_cam = p.render_camera
+    base_matrix = base_cam.matrix_world.copy()
+    est_display = display.detail_estimate(p, base_cam)
+    check("Taille de la chaîne sur l'image estimée (px et px/cm) et notée après le rendu",
+          est_display is not None and est_display[2] > 0 and "px par cm" in p.render_note, (est_display, p.render_note))
+    # Chaîne réduite à l'écran (comme sur un buste entier) : le gros plan doit la recadrer en grand.
+    p.render_res_x, p.render_res_y = 160, 120
+    p.preview_scale = 0.2
+    ps.view_layers[0].update()
+    est_display = display.detail_estimate(p, base_cam)
+    fill_display = max(est_display[0] / 160, est_display[1] / 120)
+    p.render_closeup = True
+    check("Rendu en gros plan sur la chaîne", run("render", mode="QUICK") == {"FINISHED"})
+    closeups = display.preview_objects(p, "closeup")
+    cu = closeups[0] if closeups else None
+    est_close = display.detail_estimate(p, cu) if cu else None
+    fill = max(est_close[0] / 160, est_close[1] / 120) if est_close else 0
+    check("Gros plan : une seule caméra, dans la scène d'aperçu, même angle que la caméra du display",
+          len(closeups) == 1 and cu.name in ps.objects and cu.get("mcs_preview")
+          and cu.matrix_world.to_quaternion().rotation_difference(base_matrix.to_quaternion()).angle < 1e-4)
+    check("Gros plan : la chaîne remplit le cadre sans en sortir (et bien plus de px par cm)", 0.6 < fill <= 0.95
+          and fill > 2 * fill_display and est_close[2] > 2 * est_display[2], (fill, fill_display, est_close, est_display))
+    check("Gros plan : caméra du display intacte et rétablie", base_cam.matrix_world == base_matrix
+          and ps.camera == base_cam and p.render_camera == base_cam)
+    from bl_ext.user_default.mio_chain_studio.props import _poll_camera
+    check("La caméra du gros plan n'est pas proposée comme caméra du display", not _poll_camera(p, cu)
+          and _poll_camera(p, base_cam))
+    n_png = len([f for f in os.listdir(p.render_dir) if f.endswith(".png")])
+    run("render", mode="QUICK")
+    check("Deux rendus de suite : aucune image écrasée, nom « gros_plan »",
+          len([f for f in os.listdir(p.render_dir) if f.endswith(".png")]) == n_png + 1
+          and all("gros_plan" in f for f in sorted(os.listdir(p.render_dir), key=lambda f: os.path.getmtime(
+              os.path.join(p.render_dir, f)))[-2:]))
+    check("Gros plan recadré sans doublon", len(display.preview_objects(p, "closeup")) == 1
+          and len([c for c in bpy.data.cameras if c.name.startswith("MCS_Gros_Plan")]) == 1)
+    ps.render.use_simplify = True
+    ps.cycles.texture_limit_render = "256"
+    run("render", mode="QUICK")
+    check("Limite de textures du display (Simplify) signalée", "256 px" in p.render_note, p.render_note)
+    ps.render.use_simplify = False
+    p.render_closeup = False
+    p.preview_scale = 1.0
+    p.render_res_x, p.render_res_y = 64, 48
     run("export_check")
     excl = [i.message for i in p.report if i.category == "Exclusion" and i.severity == "ERROR"]
     check("Display exclu de l'export", not excl, excl)

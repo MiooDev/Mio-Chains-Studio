@@ -20,7 +20,7 @@ def _poll_mesh(self, obj):
 
 
 def _poll_camera(self, obj):
-    return obj.type == "CAMERA"
+    return obj.type == "CAMERA" and not obj.get("mcs_preview")      # caméra du display, pas celle du gros plan
 
 
 def _poll_export_mesh(self, obj):
@@ -215,10 +215,15 @@ class MCS_Project(bpy.types.PropertyGroup):
     render_percent: IntProperty(name="%", default=100, min=1, max=100, subtype="PERCENTAGE")
     render_dir: StringProperty(name="Dossier de sortie", default="//rendus/", subtype="DIR_PATH")
     render_mode: EnumProperty(name="Mode", default="QUICK", items=[
-        ("QUICK", "Aperçu rapide", "Échantillons réduits et 50 % de la résolution, réglages restaurés"),
+        ("QUICK", "Aperçu rapide", "Échantillons réduits, même résolution (les petits détails restent visibles), "
+                                   "réglages restaurés"),
         ("FINAL", "Rendu final", "Réglages de rendu du display tels quels"),
     ])
     quick_samples: IntProperty(name="Échantillons (rapide)", default=16, min=1, max=512)
+    render_closeup: BoolProperty(name="Gros plan sur la chaîne", default=False,
+                                 description="Cadre automatiquement le rendu sur la chaîne, sous le même angle que la "
+                                             "caméra du display, pour voir les petits détails (diamants, paillettes)")
+    render_note: StringProperty(options={"HIDDEN"})
 
     def shader_for_kind(self, kind=None):
         return self.shader_emissive if (kind or self.mat_kind) == "EMISSIVE" else self.shader_ped

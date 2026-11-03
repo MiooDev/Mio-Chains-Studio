@@ -1,4 +1,4 @@
-# Vérifications, limites connues et tests restants (version 0.3.5)
+# Vérifications, limites connues et tests restants (version 0.3.6)
 
 ## Environnement des tests réellement exécutés
 
@@ -9,7 +9,7 @@
 - **Copie testée** : l'addon **installé depuis le ZIP** (`extensions.package_install_files`).
 - **Script** : `tests/run_tests.py`.
 
-**Résultat : 167/167 vérifications réussies.**
+**Résultat : 177/177 vérifications réussies.**
 
 | Point demandé | Vérification exécutée |
 |---|---|
@@ -36,6 +36,8 @@
 | Textures du display (0.3.2) | Chemin relatif au display retrouvé ; texture introuvable reprise du projet (même fichier) ; seule la texture vraiment absente est signalée, puis retrouvée par « Rechercher les textures manquantes » dans un sous-dossier |
 | Mettre la chaîne sur le display (0.3.5) | Sans bijou désigné : la chaîne sélectionnée dans le projet est posée dans la scène du display, qui s'affiche ; rien de sélectionné : refus clair ; actualisation sans sélection : la chaîne mémorisée reste posée ; bijou de l'étape 2 désigné : il redevient la source |
 | Textures du display (0.3.5) | Sélecteurs : dossiers et images affichés (filtre images + `*.dds`, DDS reconnu par Blender) ; « Choisir… » relie une texture à un fichier d'un autre nom et refuse un fichier non image ; un vrai DDS de Teef est relié et lu ; texture présente seulement intégrée (packed) au projet : réutilisée |
+| Textures au rendu (0.3.6) | Copie de la chaîne : UV, images et nœuds UV Map identiques à la source ; damier rendu sur la copie (matériau d'OBJ et `ped.sps`) ; graphe Sollumz `ped` / `ped_emissive` sans couleur de sommet. Texture « paillettes » : invisible à 6 px/cm (caméra du display), visible en gros plan à 64 px/cm |
+| Gros plan et détails (0.3.6) | Rendu rapide à la résolution complète ; taille de la chaîne sur l'image estimée (px, px/cm) ; gros plan : une seule caméra dans la scène d'aperçu, même angle que celle du display, chaîne à ~75 % du cadre, caméra du display intacte ; limite de textures Simplify signalée ; deux rendus de suite sans écrasement |
 | Exclusion du display | Display chargé dans une scène séparée ; aucune erreur d'exclusion ; aucun objet du display dans le YDD |
 | Dépendances | Dossier Teef incomplet ou absent refusé ; Sollumz désactivé : export refusé et panneaux sans erreur |
 | Statut en erreur (0.3.3) | Si le calcul d'un statut échoue, tous les panneaux restent dessinés et l'erreur s'affiche dans le panneau concerné |
@@ -64,3 +66,4 @@
 - **Reconstruction groupée** : préparer une sélection reconstruit aussi les autres courbes déjà préparées du projet, pour garder l'empilement cohérent. Préparez un pendentif à la fois.
 - **Noms en double** : Blender ajoute `.001` quand un nom est déjà pris (par exemple drawable et fichier nommés pareil). Sollumz retire ce suffixe à l'export ; le panneau affiche le nom réellement exporté.
 - **Fichiers de stream FiveM** (manifest, métadonnées de vêtements) : hors du périmètre de l'addon.
+- **Gros plan** : la caméra est placée devant la chaîne, sous l'angle de la caméra du display. Un objet du display placé entre les deux (main, cheveux…) peut la cacher ; dans ce cas, réglez l'angle de la caméra du display.
