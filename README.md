@@ -176,3 +176,7 @@ python -I tests/run_tests.py -- /tmp/mcs_test /chemin/vers/Teef
 Résultats, limites et tests restants : [docs/LIMITES_ET_TESTS.md](docs/LIMITES_ET_TESTS.md).
 
 Licence : GPL-3.0-or-later.
+
+## Mio Chain Photo (outil web)
+
+Le dossier [`web/`](web/) contient **Mio Chain Photo** : un fichier HTML unique (`web/mio_chain_photo.html`) qui lit vos `.ydr` / `.ydd` et leurs `.ytd` directement dans le navigateur, puis prend des photos PNG des chaînes (une par une ou toutes d'un coup, en ZIP). Voir [`web/README.md`](web/README.md).
