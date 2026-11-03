@@ -1,4 +1,4 @@
-# Vérifications, limites connues et tests restants (version 0.3.8)
+# Vérifications, limites connues et tests restants (version 0.3.9)
 
 ## Environnement des tests réellement exécutés
 
@@ -9,7 +9,7 @@
 - **Copie testée** : l'addon **installé depuis le ZIP** (`extensions.package_install_files`).
 - **Script** : `tests/run_tests.py`.
 
-**Résultat : 184/184 vérifications réussies.**
+**Résultat : 196/196 vérifications réussies.**
 
 | Point demandé | Vérification exécutée |
 |---|---|
@@ -40,6 +40,7 @@
 | Gros plan et détails (0.3.6) | Rendu rapide à la résolution complète ; taille de la chaîne sur l'image estimée (px, px/cm) ; gros plan : une seule caméra dans la scène d'aperçu, même angle que celle du display, chaîne à ~75 % du cadre, caméra du display intacte ; limite de textures Simplify signalée ; deux rendus de suite sans écrasement |
 | Matériaux de l'aperçu à jour (0.3.7) | Corrigé : la copie gardait l'ancien matériau à l'actualisation. Désormais : bumpiness et texture Bump modifiées dans le projet → aperçu signalé à actualiser, puis copie refaite avec les nouvelles valeurs ; retouche de la copie gardée si le projet ne change pas ; aucune copie orpheline. Rendu Cycles éclairé : la normal map « diamants » est visible |
 | Value Parameters au rendu (0.3.8) | Constaté : Cycles ignore les nœuds Python de Sollumz. Avec une normal map en fichier, bumpiness 0, 1.3 ou 5 donnent la même image, à l'octet près ; la rugosité retombe à environ 1 (mat). Corrigé sur les copies d'aperçu seulement : chaque valeur est figée dans un nœud Valeur de Blender (aucun lien depuis un nœud Python ; bumpiness, specularFalloffMult et specularIntensityMult relus) ; matériau du projet intact. Rendu Cycles de la copie : relief des diamants visible et plus marqué |
+| Normal map par défaut (0.3.9) | Fichier non DDS refusé ; DDS choisi copié dans le dossier de configuration et toujours disponible après suppression de l'original ; mode Personnalisé sans Bump et preset sur `teef_normal_001.dds` : votre normal map (fichier du preset inchangé) ; « Mettre ma normal map sur le projet » : plus aucun matériau sur Teef, Non-Color et Embedded ; YDD exporté : votre normal map intégrée, plus de `teef_normal_001` ; sans réglage : Teef comme avant |
 | Exclusion du display | Display chargé dans une scène séparée ; aucune erreur d'exclusion ; aucun objet du display dans le YDD |
 | Dépendances | Dossier Teef incomplet ou absent refusé ; Sollumz désactivé : export refusé et panneaux sans erreur |
 | Statut en erreur (0.3.3) | Si le calcul d'un statut échoue, tous les panneaux restent dessinés et l'erreur s'affiche dans le panneau concerné |

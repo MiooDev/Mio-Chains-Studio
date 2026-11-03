@@ -519,6 +519,45 @@ def main():
     check("Supprimer un preset", run("preset_delete") == {"FINISHED"} and "or" not in presets.names())
     check("Presets dans un dossier persistant", os.path.isfile(os.path.join(WORK, "presets", "argent.json")))
 
+    # 4b. Normal map par défaut -------------------------------------------------------------
+    print("\n[4b] Normal map par défaut")
+    prefs.default_bump = ""
+    check("Sans réglage : teef_normal_001.dds reste la normal map par défaut",
+          os.path.basename(materials.default_bump()[0]) == "teef_normal_001.dds" and not materials.default_bump()[1])
+    teef_users = materials.project_teef_bump_materials(p)
+    check("Matériaux du projet sur teef_normal_001.dds repérés", len(teef_users) >= 2, [m.name for m in teef_users])
+    check("Choisir un fichier qui n'est pas un DDS : refus", run("default_bump_choose", filepath=diff) != {"FINISHED"}
+          and not prefs.default_bump)
+    src_dds = os.path.join(WORK, "a_deplacer", "diamants_test.dds")
+    os.makedirs(os.path.dirname(src_dds))
+    shutil.copyfile(os.path.join(os.path.dirname(os.path.dirname(szb.__file__)), "sollumz", "tests", "assets", "cwxml",
+                                 "txd", "test_image.dds"), src_dds)
+    check("Choisir ma normal map par défaut (.dds)", run("default_bump_choose", filepath=src_dds) == {"FINISHED"})
+    kept = bpy.path.abspath(prefs.default_bump)
+    check("Copiée dans le dossier de configuration (l'original peut être déplacé)",
+          os.path.isfile(kept) and not os.path.samefile(kept, src_dds) and os.path.basename(kept) == "diamants_test.dds")
+    shutil.rmtree(os.path.dirname(src_dds))
+    check("Original supprimé : la normal map par défaut reste disponible", materials.default_bump() == (kept, True))
+    p.mat_kind, p.mat_mode, p.bump_path = "PED", "CUSTOM", ""
+    spec = materials.spec_from_ui(p)
+    check("Mode Personnalisé sans Bump : votre normal map, en Non-Color et Embedded",
+          os.path.samefile(spec["textures"]["BumpSampler"]["path"], kept)
+          and spec["textures"]["BumpSampler"]["colorspace"] == "Non-Color" and spec["textures"]["BumpSampler"]["embedded"])
+    p.mat_mode, p.preset_name = "PRESET", "argent"
+    check("Preset qui utilise teef_normal_001.dds : votre normal map à la place (fichier du preset inchangé)",
+          os.path.samefile(materials.spec_from_ui(p)["textures"]["BumpSampler"]["path"], kept)
+          and materials.is_teef_bump(presets.load("argent")["textures"]["BumpSampler"]["path"]))
+    p.mat_mode = "CUSTOM"
+    check("Mettre ma normal map sur le projet", run("default_bump_apply") == {"FINISHED"})
+    bumps = {m.name: m.node_tree.nodes["BumpSampler"] for m in teef_users}
+    check("Matériaux du projet : BumpSampler = votre normal map, Non-Color, Embedded, plus aucun Teef",
+          all(os.path.samefile(bpy.path.abspath(n.image.filepath), kept) and n.image.colorspace_settings.name == "Non-Color"
+              and n.texture_properties.embedded for n in bumps.values())
+          and not materials.project_teef_bump_materials(p), {k: n.image.filepath for k, n in bumps.items()})
+    check("Image partagée d'un autre matériau toujours intacte", fnode.image.colorspace_settings.name == shared_before)
+    errs = draw_all_panels()
+    check("Panneaux dessinés avec la normal map par défaut", not errs, errs)
+
     # 5. Color Attributes ------------------------------------------------------------------
     print("\n[5] Color Attributes")
     chain.data.color_attributes.new("Color 1", "FLOAT_COLOR", "POINT")
@@ -623,7 +662,9 @@ def main():
     check("YDD teef_000_u avec drawable teef_012_u", "<Name>teef_012_u</Name>" in xml)
     check("YDD : LOD High seulement", "DrawableModelsHigh" in xml and "DrawableModelsMedium" not in xml and "DrawableModelsLow" not in xml)
     check("YDD : 100 % des sommets sur l'os 38", any("à 100 % sur l'os 38" in line for line in json.loads(p.last_export)["lines"]))
-    check("YDD : Bump et Spec DDS intégrés", os.path.isfile(os.path.join(p.export_dir, "teef_000_u", "teef_normal_001.dds"))
+    check("YDD : Bump (votre normal map par défaut) et Spec DDS intégrés",
+          os.path.isfile(os.path.join(p.export_dir, "teef_000_u", "diamants_test.dds"))
+          and "<Name>diamants_test</Name>" in xml and "teef_normal_001" not in xml
           and os.path.isfile(os.path.join(p.export_dir, "teef_000_u", "teef_spec_000.dds")))
     check("YDD : ancienne chaîne absente", xml.count("<VertexBuffer>") >= 1 and "teef_diff_012_a_uni" not in xml)
     check("YDD : Colour0 255 128 0 255 et glow 255 186 255 255", "255 128 0 255" in xml and "255 186 255 255" in xml)

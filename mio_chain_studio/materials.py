@@ -6,6 +6,8 @@ réglables (par défaut ped.sps et ped_emissive.sps, dont les entrées ont été
 
 import json
 import os
+import shutil
+import struct
 
 import bmesh
 import bpy
@@ -14,6 +16,7 @@ import numpy as np
 from . import presets
 from . import sollumz_bridge as szb
 from . import teef
+from .prefs import addon_prefs, save_user_prefs, textures_dir
 from .utils import (
     McsError,
     abspath,
@@ -25,6 +28,81 @@ from .utils import (
 
 SAMPLERS = presets.SAMPLERS
 REQUIRED_EMBEDDED = ("BumpSampler", "SpecSampler")
+TEEF_BUMP_FILE = os.path.basename(teef.FILES["bump"]).lower()       # teef_normal_001.dds
+
+# ---------------------------------------------------------------------------
+# Normal map par défaut (préférence « Normal map par défaut »)
+# ---------------------------------------------------------------------------
+
+DXGI_NAMES = {71: "BC1 (DXT1)", 74: "BC2 (DXT3)", 77: "BC3 (DXT5)", 80: "BC4", 83: "BC5", 98: "BC7", 28: "RGBA 8 bits",
+              87: "BGRA 8 bits"}
+
+
+def dds_info(path):
+    """(largeur, hauteur, format, niveaux de mipmap) d'un fichier DDS ; McsError s'il n'en est pas un."""
+    name = os.path.basename(path)
+    try:
+        with open(path, "rb") as f:
+            head = f.read(148)
+    except OSError as exc:
+        raise McsError(f"Fichier illisible : {name} ({exc}).") from exc
+    if len(head) < 128 or head[:4] != b"DDS ":
+        raise McsError(f"{name} n'est pas un fichier DDS : la normal map intégrée au YDD doit être un .dds.")
+    height, width = struct.unpack_from("<II", head, 12)
+    mips = max(1, struct.unpack_from("<I", head, 28)[0])
+    pf_flags = struct.unpack_from("<I", head, 80)[0]
+    fourcc = head[84:88]
+    if pf_flags & 0x4:
+        if fourcc == b"DX10" and len(head) >= 132:
+            dxgi = struct.unpack_from("<I", head, 128)[0]
+            fmt = DXGI_NAMES.get(dxgi, f"DXGI {dxgi}")
+        else:
+            fmt = fourcc.decode("latin1").strip("\0 ")
+    else:
+        fmt = f"{struct.unpack_from('<I', head, 88)[0]} bits non compressé"
+    if not width or not height:
+        raise McsError(f"{name} : dimensions nulles dans l'en-tête DDS.")
+    return width, height, fmt, mips
+
+
+def default_bump():
+    """(chemin, personnalisée ?) : votre normal map par défaut si elle existe, sinon celle du dossier Teef."""
+    prefs = addon_prefs()
+    path = abspath(prefs.default_bump) if prefs and prefs.default_bump else ""
+    if path and os.path.isfile(path):
+        return path, True
+    return teef.path_of("bump"), False
+
+
+def is_teef_bump(path):
+    return bool(path) and os.path.basename(str(path).replace("\\", "/")).lower() == TEEF_BUMP_FILE
+
+
+def use_default_bump(data):
+    """Remplace teef_normal_001.dds par votre normal map par défaut. Retourne True si un remplacement a eu lieu."""
+    custom, is_custom = default_bump()
+    bump = data.get("textures", {}).get("BumpSampler")
+    if is_custom and bump and is_teef_bump(bump.get("path")):
+        bump["path"] = custom
+        return True
+    return False
+
+
+def set_default_bump(path):
+    """Mémorise `path` comme normal map par défaut : copie dans le dossier de configuration, puis préférence."""
+    src = abspath(path)
+    if not os.path.isfile(src):
+        raise McsError(f"Fichier introuvable : {src}")
+    info = dds_info(src)
+    prefs = addon_prefs()
+    if prefs is None:
+        raise McsError("Préférences de l'addon indisponibles.")
+    dest = os.path.join(textures_dir(), os.path.basename(src))
+    if os.path.normcase(os.path.abspath(src)) != os.path.normcase(os.path.abspath(dest)):
+        shutil.copyfile(src, dest)
+    prefs.default_bump = dest
+    save_user_prefs()
+    return dest, info
 
 # Value Parameters de base (votre réglage du matériau MCS_glow). umGlobalParams vaut 0,0025, valeur de
 # Sollumz que le panneau affiche arrondie à « 0.002 ». Seuls les paramètres présents dans le shader sont posés.
@@ -69,10 +147,11 @@ def spec_from_ui(proj):
             raise McsError("Choisissez la texture DiffuseSampler.")
         data["textures"]["DiffuseSampler"] = {"path": abspath(proj.diffuse_path),
                                               "embedded": proj.diffuse_embedded, "colorspace": "sRGB"}
-        data["textures"]["BumpSampler"] = {"path": abspath(proj.bump_path) if proj.bump_path else teef.path_of("bump"),
+        data["textures"]["BumpSampler"] = {"path": abspath(proj.bump_path) if proj.bump_path else default_bump()[0],
                                            "embedded": True, "colorspace": "Non-Color"}
         data["textures"]["SpecSampler"] = {"path": abspath(proj.spec_path) if proj.spec_path else teef.path_of("spec"),
                                            "embedded": True, "colorspace": None}
+    use_default_bump(data)          # votre normal map par défaut à la place de celle de Teef
     # Exigences quel que soit le mode : Bump et Spec intégrés, Bump en Non-Color.
     for sampler in REQUIRED_EMBEDDED:
         if sampler in data["textures"]:
@@ -374,6 +453,7 @@ class MIO_OT_preset_apply(bpy.types.Operator):
             return {"CANCELLED"}
         try:
             data = presets.load(proj.preset_name)
+            use_default_bump(data)
             complete, missing, absent = presets.status(data)
             if missing:
                 raise McsError("Textures introuvables : " + ", ".join(f"{s} ({p})" for s, p in missing) +
@@ -479,5 +559,74 @@ class MIO_OT_params_base(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class MIO_OT_default_bump_choose(bpy.types.Operator):
+    bl_idname = "mio_chain.default_bump_choose"
+    bl_label = "Choisir ma normal map par défaut…"
+    bl_description = ("Mémorise votre normal map (.dds) comme BumpSampler par défaut, à la place de teef_normal_001.dds. "
+                      "Elle est copiée dans le dossier de configuration de Blender : elle reste disponible même si "
+                      "vous déplacez l'original")
+
+    filepath: bpy.props.StringProperty(subtype="FILE_PATH", options={"SKIP_SAVE"})
+    filter_glob: bpy.props.StringProperty(default="*.dds", options={"HIDDEN"})
+
+    def invoke(self, context, event):
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        try:
+            dest, (w, h, fmt, mips) = set_default_bump(self.filepath)
+        except McsError as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+        note = "" if mips > 1 else " Sans mipmaps : elle peut scintiller de loin en jeu."
+        self.report({"INFO"}, f"Normal map par défaut : {os.path.basename(dest)} ({w}×{h}, {fmt}).{note}")
+        return {"FINISHED"}
+
+
+def project_teef_bump_materials(proj):
+    """Matériaux Sollumz des composants dont le BumpSampler est encore teef_normal_001.dds."""
+    from .utils import part_meshes
+    out = []
+    for obj, role in part_meshes(proj):
+        for mat in obj.data.materials:
+            if mat in out or not szb.is_sollumz_material(mat):
+                continue
+            node = mat.node_tree.nodes.get("BumpSampler")
+            if node is not None and node.image is not None and is_teef_bump(node.image.filepath):
+                out.append(mat)
+    return out
+
+
+class MIO_OT_default_bump_apply(bpy.types.Operator):
+    bl_idname = "mio_chain.default_bump_apply"
+    bl_label = "Mettre ma normal map sur le projet"
+    bl_description = ("Remplace teef_normal_001.dds par votre normal map par défaut dans les matériaux Sollumz des "
+                      "composants (BumpSampler en Non-Color et Embedded). Les autres normal maps ne sont pas touchées")
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        proj = get_project(context)
+        path, is_custom = default_bump()
+        if not is_custom:
+            self.report({"ERROR"}, "Choisissez d'abord votre normal map par défaut.")
+            return {"CANCELLED"}
+        mats = project_teef_bump_materials(proj)
+        if not mats:
+            self.report({"INFO"}, "Aucun matériau du projet n'utilise teef_normal_001.dds.")
+            return {"FINISHED"}
+        try:
+            for mat in mats:
+                node = mat.node_tree.nodes["BumpSampler"]
+                node.image = get_image(path, "Non-Color", mat)
+                node.texture_properties.embedded = True
+        except McsError as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"Normal map {os.path.basename(path)} posée sur {len(mats)} matériau(x) : "
+                              + ", ".join(m.name for m in mats[:4]) + ("…" if len(mats) > 4 else "") + ".")
+        return {"FINISHED"}
+
+
 CLASSES = (MIO_OT_apply_faces, MIO_OT_params_base, MIO_OT_preset_save, MIO_OT_preset_apply, MIO_OT_preset_duplicate,
-           MIO_OT_preset_delete, MIO_OT_preset_relocate)
+           MIO_OT_preset_delete, MIO_OT_preset_relocate, MIO_OT_default_bump_choose, MIO_OT_default_bump_apply)

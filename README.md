@@ -59,6 +59,7 @@ Les courbes d'origine sont conservées, masquées, comme source. Un nouveau clic
 3. Choisissez le mode :
    - **Preset** : shader, textures et paramètres viennent du preset ;
    - **Personnalisé** : DiffuseSampler à votre choix. BumpSampler et SpecSampler sont par défaut `teef_normal_001.dds` et `teef_spec_000.dds`.
+   - **Normal map par défaut** : avec « Choisir ma normal map par défaut… » (étape 3 ou préférences de l'addon), votre `.dds` remplace `teef_normal_001.dds` partout où l'addon l'utilisait : mode Personnalisé sans BumpSampler, et presets qui pointent vers celle de Teef. Le fichier est copié dans le dossier de configuration de Blender : il reste disponible même si vous déplacez l'original. « Mettre ma normal map sur le projet » remplace aussi `teef_normal_001.dds` dans les matériaux déjà appliqués. Elle est intégrée au YDD comme la normal map de Teef.
 4. **Appliquer aux faces sélectionnées**. Le bouton :
    - crée ou réutilise le matériau ;
    - l'assigne à ces faces uniquement ;

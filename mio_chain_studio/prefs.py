@@ -17,6 +17,11 @@ def default_presets_dir():
     return bpy.utils.user_resource("CONFIG", path=os.path.join("mio_chain_studio", "presets"), create=True)
 
 
+def textures_dir():
+    """Dossier de configuration où l'addon garde vos textures par défaut (copie : l'original peut bouger)."""
+    return bpy.utils.user_resource("CONFIG", path=os.path.join("mio_chain_studio", "textures"), create=True)
+
+
 def save_user_prefs():
     """Enregistre les préférences si Blender ne le fait pas automatiquement."""
     if not bpy.context.preferences.use_preferences_save:
@@ -45,12 +50,20 @@ class MCS_Preferences(bpy.types.AddonPreferences):
         default=15000, min=100,
     )
     display_markers: StringProperty(default="{}", options={"HIDDEN"})
+    default_bump: StringProperty(
+        name="Normal map par défaut",
+        description="BumpSampler utilisé à la place de teef_normal_001.dds : mode Personnalisé sans Bump choisi, "
+                    "et presets qui utilisent celle de Teef. Vide = teef_normal_001.dds",
+        subtype="FILE_PATH",
+    )
 
     def draw(self, context):
         col = self.layout.column()
         col.prop(self, "teef_dir")
         col.prop(self, "presets_dir")
         col.label(text=f"Presets enregistrés dans : {self.presets_folder()}")
+        col.prop(self, "default_bump")
+        col.operator("mio_chain.default_bump_choose", icon="FILEBROWSER")
         col.prop(self, "tri_warning")
         col.label(text=f"Repères de display enregistrés : {len(self.markers())}")
 

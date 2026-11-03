@@ -227,12 +227,27 @@ class MCS_PT_step3(_Base, bpy.types.Panel):
             box.prop(proj, "diffuse_embedded")
             box.prop(proj, "bump_path")
             box.prop(proj, "spec_path")
-            for label, path in (("Bump", proj.bump_path or teef.path_of("bump")),
+            for label, path in (("Bump", proj.bump_path or materials.default_bump()[0]),
                                 ("Spec", proj.spec_path or teef.path_of("spec"))):
                 exists = bool(path) and os.path.isfile(bpy.path.abspath(path))
                 box.label(text=f"{label} : {os.path.basename(path) if path else 'dossier Teef non défini'}",
                           icon="CHECKMARK" if exists else "ERROR")
         box.label(text="Bump et Spec : Embedded ; Bump en Non-Color (forcé).", icon="INFO")
+        bump, custom = materials.default_bump()
+        nbox = layout.box()
+        row = nbox.row(align=True)
+        row.label(text=f"Normal map par défaut : {os.path.basename(bump) if bump else 'aucune'}",
+                  icon="CHECKMARK" if custom else "TEXTURE")
+        row.operator("mio_chain.default_bump_choose", text="", icon="FILEBROWSER")
+        if not custom:
+            draw_wrapped(nbox, context, "teef_normal_001.dds (dossier Teef). Choisissez la vôtre : elle sera utilisée "
+                                        "à sa place, aussi dans les presets.", icon="INFO")
+        else:
+            todo = status.cached("teef_bump_mats", lambda: [m.name for m in materials.project_teef_bump_materials(proj)])
+            if todo:
+                draw_wrapped(nbox, context, f"{len(todo)} matériau(x) du projet utilisent encore teef_normal_001.dds.",
+                             icon="ERROR")
+                nbox.operator("mio_chain.default_bump_apply", icon="TEXTURE")
         col = layout.box().column(align=True)
         col.label(text="Cube Projection (faces sélectionnées)")
         col.prop(proj, "cube_size")
