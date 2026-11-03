@@ -201,7 +201,9 @@ class MCS_Project(bpy.types.PropertyGroup):
     preview_rot: FloatVectorProperty(name="Rotation", size=3, subtype="EULER", update=_preview_update)
     preview_scale: FloatProperty(name="Échelle", default=1.0, min=0.001, soft_max=100.0, update=_preview_update)
     preview_keep_materials: BoolProperty(name="Garder les matériaux de l'aperçu", default=True,
-                                         description="À l'actualisation, réutiliser les matériaux d'aperçu déjà modifiés")
+                                         description="À l'actualisation, garder les matériaux d'aperçu que vous avez retouchés, "
+                                                     "tant que le matériau du projet n'a pas changé (sinon la copie "
+                                                     "est refaite)")
     preview_signature: StringProperty(options={"HIDDEN"})
     preview_source: EnumProperty(name="Quoi placer", default="AUTO", items=[
         ("AUTO", "Automatique", "Le bijou désigné à l'étape 2 ; s'il n'y en a pas, les maillages sélectionnés "

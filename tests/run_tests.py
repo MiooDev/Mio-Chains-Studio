@@ -759,6 +759,36 @@ def main():
     src = bpy.data.objects[copy["mcs_preview_src"]]
     check("Copie indépendante (maillage et matériaux)", copy.data != src.data
           and not set(copy.data.materials) & set(src.data.materials))
+
+    # Matériaux de l'aperçu : une retouche est gardée, mais la copie est refaite dès que le matériau du projet change.
+    def copy_of(src_name):
+        return next(c for c in display.preview_objects(p, "copy") if c["mcs_preview_src"] == src_name)
+    pair = next((c["mcs_preview_src"], i, sm) for c in display.preview_objects(p, "copy")
+                for i, sm in enumerate(bpy.data.objects[c["mcs_preview_src"]].data.materials)
+                if sm is not None and szb.param_node(sm, "bumpiness") is not None)
+    src_name, slot, src_mat = pair
+    cm = copy_of(src_name).data.materials[slot]
+    cm.diffuse_color = (0.1, 0.2, 0.3, 1.0)
+    run("preview_refresh", show=False)
+    cm2 = copy_of(src_name).data.materials[slot]
+    check("Matériau d'aperçu retouché gardé tant que le matériau du projet ne change pas",
+          cm2 == cm and abs(cm2.diffuse_color[2] - 0.3) < 1e-6)
+    bump_node = szb.param_node(src_mat, "bumpiness")
+    old_bump = bump_node.outputs[0].default_value
+    bump_node.outputs[0].default_value = 2.5
+    status.invalidate()
+    check("Matériau du projet modifié (bumpiness) : aperçu signalé à actualiser",
+          any("changé" in m for sv, m, f in status.step_display(bpy.context, p)[1]), status.step_display(bpy.context, p)[1])
+    run("preview_refresh", show=False)
+    cm3 = copy_of(src_name).data.materials[slot]
+    check("Actualiser : l'aperçu reprend le matériau modifié (bumpiness, textures)",
+          abs(szb.param_node(cm3, "bumpiness").outputs[0].default_value - 2.5) < 1e-6
+          and cm3.node_tree.nodes["BumpSampler"].image == src_mat.node_tree.nodes["BumpSampler"].image)
+    check("Ancienne copie de matériau retirée, nom « Apercu_… » propre",
+          not [m for m in bpy.data.materials if m.get("mcs_preview") and m.users == 0]
+          and cm3.name == f"Apercu_{src_mat.name}", cm3.name)
+    bump_node.outputs[0].default_value = old_bump
+    run("preview_refresh", show=False)
     p.render_res_x, p.render_res_y, p.quick_samples = 64, 48, 1
     p.render_dir = os.path.join(WORK, "rendus")
     check("Rendu rapide", run("render", mode="QUICK") == {"FINISHED"} and any(f.endswith(".png") for f in os.listdir(p.render_dir)))

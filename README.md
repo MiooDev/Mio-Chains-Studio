@@ -132,7 +132,7 @@ Section séparée et facultative, en quatre gestes :
    - ce qui est posé : le bijou de l'étape 2 (chaîne et pendentif) ; s'il n'y en a pas, les maillages **sélectionnés dans la scène du projet** (sélectionnez votre chaîne avant de cliquer, l'addon s'en souvient) ;
    - où : sur le repère, c'est-à-dire la position mémorisée pour ce display, sinon un vide dont le nom contient « repère », « bijou », « collier »…, sinon le curseur 3D.
 
-   Après une modification, le même bouton devient **Actualiser la chaîne sur le display** : il remplace la copie, sans recharger le display ni créer de doublon.
+   Après une modification, le même bouton devient **Actualiser la chaîne sur le display** : il remplace la copie, sans recharger le display ni créer de doublon. Les matériaux suivent aussi : si vous changez un matériau du projet (texture de diamants, bumpiness, Value Parameters…), sa copie sur le display est refaite. Une retouche faite seulement sur la copie d'aperçu est gardée tant que le matériau du projet ne change pas.
 3. **Déplacer la chaîne (G / R / S)** ouvre le display et sélectionne le repère qui porte la chaîne. **Mémoriser cette position** la garde pour les prochains projets.
 4. **Voir par la caméra**, puis **Rendu rapide** ou **Rendu final**. **Revenir au projet** vous ramène à votre scène.
 

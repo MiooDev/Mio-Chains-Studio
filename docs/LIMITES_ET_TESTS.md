@@ -1,4 +1,4 @@
-# Vérifications, limites connues et tests restants (version 0.3.6)
+# Vérifications, limites connues et tests restants (version 0.3.7)
 
 ## Environnement des tests réellement exécutés
 
@@ -9,7 +9,7 @@
 - **Copie testée** : l'addon **installé depuis le ZIP** (`extensions.package_install_files`).
 - **Script** : `tests/run_tests.py`.
 
-**Résultat : 177/177 vérifications réussies.**
+**Résultat : 181/181 vérifications réussies.**
 
 | Point demandé | Vérification exécutée |
 |---|---|
@@ -38,6 +38,7 @@
 | Textures du display (0.3.5) | Sélecteurs : dossiers et images affichés (filtre images + `*.dds`, DDS reconnu par Blender) ; « Choisir… » relie une texture à un fichier d'un autre nom et refuse un fichier non image ; un vrai DDS de Teef est relié et lu ; texture présente seulement intégrée (packed) au projet : réutilisée |
 | Textures au rendu (0.3.6) | Copie de la chaîne : UV, images et nœuds UV Map identiques à la source ; damier rendu sur la copie (matériau d'OBJ et `ped.sps`) ; graphe Sollumz `ped` / `ped_emissive` sans couleur de sommet. Texture « paillettes » : invisible à 6 px/cm (caméra du display), visible en gros plan à 64 px/cm |
 | Gros plan et détails (0.3.6) | Rendu rapide à la résolution complète ; taille de la chaîne sur l'image estimée (px, px/cm) ; gros plan : une seule caméra dans la scène d'aperçu, même angle que celle du display, chaîne à ~75 % du cadre, caméra du display intacte ; limite de textures Simplify signalée ; deux rendus de suite sans écrasement |
+| Matériaux de l'aperçu à jour (0.3.7) | Corrigé : la copie gardait l'ancien matériau à l'actualisation. Désormais : bumpiness et texture Bump modifiées dans le projet → aperçu signalé à actualiser, puis copie refaite avec les nouvelles valeurs ; retouche de la copie gardée si le projet ne change pas ; aucune copie orpheline. Rendu Cycles éclairé : la normal map « diamants » est visible |
 | Exclusion du display | Display chargé dans une scène séparée ; aucune erreur d'exclusion ; aucun objet du display dans le YDD |
 | Dépendances | Dossier Teef incomplet ou absent refusé ; Sollumz désactivé : export refusé et panneaux sans erreur |
 | Statut en erreur (0.3.3) | Si le calcul d'un statut échoue, tous les panneaux restent dessinés et l'erreur s'affiche dans le panneau concerné |

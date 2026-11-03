@@ -33,6 +33,7 @@ from .utils import (
 
 KIND = "mcs_preview_kind"       # copy / root / marker / collection / material
 SRC = "mcs_preview_src"         # nom de l'objet ou du matériau source
+SRC_SIG = "mcs_preview_src_sig" # empreinte du matériau source au moment de la copie
 
 # Fichiers proposés dans les sélecteurs de textures (le DDS en premier : textures GTA / FiveM).
 IMAGE_GLOB = "*.dds;*.png;*.jpg;*.jpeg;*.tga;*.tif;*.tiff;*.bmp;*.exr;*.hdr;*.webp"
@@ -451,17 +452,72 @@ def _preview_collection(proj):
     return coll
 
 
+_NODE_SETTINGS = ("uv_map", "layer_name", "attribute_name", "operation", "blend_type", "data_type", "interpolation",
+                  "projection", "extension", "space", "clamp", "distribution", "subsurface_method")
+
+
+def _socket_value(sock):
+    value = getattr(sock, "default_value", None)
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    try:
+        return tuple(round(v, 6) for v in value)
+    except TypeError:
+        return str(value)
+
+
+def material_signature(mat):
+    """Empreinte d'un matériau : textures (fichier, espace colorimétrique), valeurs, réglages et liens des nœuds.
+
+    Change dès que vous modifiez le matériau du projet (texture de diamants, bumpiness, Value Parameters…).
+    """
+    parts = [mat.name, tuple(mat.diffuse_color), mat.roughness, mat.metallic]
+    tree = mat.node_tree
+    if tree is not None:
+        for node in sorted(tree.nodes, key=lambda n: n.name):
+            parts += [node.name, node.bl_idname, node.mute]
+            img = getattr(node, "image", None)
+            if img is not None:
+                parts += [img.name, img.filepath, img.source, img.colorspace_settings.name,
+                          img.packed_file is not None]
+            for attr in _NODE_SETTINGS:
+                if hasattr(node, attr):
+                    parts.append(getattr(node, attr))
+            for sock in list(node.inputs) + list(node.outputs):
+                parts.append(_socket_value(sock))
+        for link in tree.links:
+            parts.append(f"{link.from_node.name}.{link.from_socket.identifier}>"
+                         f"{link.to_node.name}.{link.to_socket.identifier}")
+    return hash_strings(parts)
+
+
 def _preview_material(proj, mat):
+    """Copie d'aperçu du matériau. Une copie retouchée n'est gardée que si le matériau du projet n'a pas changé."""
     if mat is None:
         return None
+    sig = material_signature(mat)
     if proj.preview_keep_materials:
         for m in bpy.data.materials:
-            if m.get(TAG_PROJECT) == proj.project_id and m.get(TAG_PREVIEW) and m.get(SRC) == mat.name:
+            if (m.get(TAG_PROJECT) == proj.project_id and m.get(TAG_PREVIEW) and m.get(SRC) == mat.name
+                    and m.get(SRC_SIG) == sig):
                 return m
     copy = mat.copy()
     copy.name = f"Apercu_{mat.name}"
-    tag(copy, proj, role="apercu", **{TAG_PREVIEW: 1, KIND: "material", SRC: mat.name})
+    tag(copy, proj, role="apercu", **{TAG_PREVIEW: 1, KIND: "material", SRC: mat.name, SRC_SIG: sig})
     return copy
+
+
+def _purge_preview_materials(proj):
+    """Retire les copies d'aperçu de matériaux devenues inutiles (périmées et plus utilisées)."""
+    mine = [m for m in bpy.data.materials if m.get(TAG_PROJECT) == proj.project_id and m.get(TAG_PREVIEW)]
+    for m in mine:
+        if m.users == 0:
+            bpy.data.materials.remove(m)
+    for m in bpy.data.materials:            # noms propres : « Apercu_<matériau> » sans .001 quand c'est possible
+        if m.get(TAG_PROJECT) == proj.project_id and m.get(TAG_PREVIEW) and m.get(SRC):
+            wanted = f"Apercu_{m[SRC]}"
+            if m.name != wanted and wanted not in bpy.data.materials:
+                m.name = wanted
 
 
 def preview_signature(proj):
@@ -469,6 +525,8 @@ def preview_signature(proj):
     for obj, role in preview_sources(proj):
         parts.append(role)
         parts.extend(object_signature(obj))
+        if obj.type == "MESH":
+            parts.extend(material_signature(m) if m else "-" for m in obj.data.materials)
     return hash_strings(parts)
 
 
@@ -525,6 +583,7 @@ def refresh(context, proj):
     finally:
         if arm is not None:
             arm.data.pose_position = prev_pose
+    _purge_preview_materials(proj)
     proj.preview_scene.view_layers[0].update()
     proj.preview_signature = preview_signature(proj)
     # Vérification : une copie par composant, aucune donnée partagée avec les sources.
