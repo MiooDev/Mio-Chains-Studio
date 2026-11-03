@@ -784,6 +784,20 @@ def main():
     check("Actualiser : l'aperçu reprend le matériau modifié (bumpiness, textures)",
           abs(szb.param_node(cm3, "bumpiness").outputs[0].default_value - 2.5) < 1e-6
           and cm3.node_tree.nodes["BumpSampler"].image == src_mat.node_tree.nodes["BumpSampler"].image)
+    def strength_feed(mat):
+        nm_node = next(nd for nd in mat.node_tree.nodes if nd.bl_idname == "ShaderNodeNormalMap")
+        return [l.from_node for l in mat.node_tree.links if l.to_socket == nm_node.inputs["Strength"]]
+    feed = strength_feed(cm3)
+    check("Copie d'aperçu lisible par Cycles : aucun lien depuis un nœud Python, bumpiness figée dans un nœud Valeur",
+          not [l for l in cm3.node_tree.links if l.from_node.type == "CUSTOM"]
+          and len(feed) == 1 and feed[0].bl_idname == "ShaderNodeValue" and abs(feed[0].outputs[0].default_value - 2.5) < 1e-6,
+          [(f.bl_idname, f.outputs[0].default_value) for f in feed])
+    rough_src = [l.from_node for l in cm3.node_tree.links
+                 if l.to_node.bl_idname == "ShaderNodeMapRange" and l.to_socket == l.to_node.inputs[0]]
+    check("Rugosité et intensité spéculaire figées aussi (specularFalloffMult, specularIntensityMult)",
+          rough_src and all(n.bl_idname == "ShaderNodeValue" for n in rough_src), [n.bl_idname for n in rough_src])
+    check("Matériau du projet (FiveM) intact : ses Value Parameters restent reliés",
+          strength_feed(src_mat)[0].bl_idname == "SOLLUMZ_NT_SHADER_Parameter")
     check("Ancienne copie de matériau retirée, nom « Apercu_… » propre",
           not [m for m in bpy.data.materials if m.get("mcs_preview") and m.users == 0]
           and cm3.name == f"Apercu_{src_mat.name}", cm3.name)

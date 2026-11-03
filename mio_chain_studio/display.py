@@ -491,11 +491,54 @@ def material_signature(mat):
     return hash_strings(parts)
 
 
+PREVIEW_COPY_VERSION = "v2"     # v2 : valeurs des nœuds Python figées (lues par Cycles)
+
+
+def _is_python_node(node):
+    """Nœud défini en Python (ex. Value Parameters de Sollumz) : Cycles ne sait pas l'évaluer.
+
+    Blender marque ces nœuds du type « CUSTOM » ; les groupes personnalisés (« CUSTOM GROUP ») sont, eux, évalués.
+    """
+    return node.type == "CUSTOM"
+
+
+def freeze_python_nodes(mat):
+    """Remplace, dans une copie d'aperçu, chaque sortie reliée d'un nœud Python par un nœud « Valeur » de Blender.
+
+    Les Value Parameters de Sollumz (bumpiness, specularFalloffMult, specularIntensityMult, emissiveMultiplier…)
+    sont des nœuds Python : la vue « Aperçu matériau » (EEVEE) lit leurs valeurs, mais Cycles les ignore et prend
+    des valeurs de secours (relief 1, rugosité presque 1, donc mat). Avec des nœuds Valeur, chaque moteur rend le
+    matériau comme dans la vue. Retourne le nombre de sorties figées.
+    """
+    tree = mat.node_tree
+    if tree is None:
+        return 0
+    frozen = 0
+    for node in list(tree.nodes):
+        if not _is_python_node(node):
+            continue
+        for i, out in enumerate(node.outputs):
+            links = [link for link in tree.links if link.from_socket == out]
+            value = getattr(out, "default_value", None)
+            if not links or not isinstance(value, (int, float)):
+                continue
+            val = tree.nodes.new("ShaderNodeValue")
+            val.name = val.label = f"{node.name} {out.name}"
+            val.outputs[0].default_value = float(value)
+            val.location = (node.location.x, node.location.y - 90 * (i + 1))
+            for link in links:
+                target = link.to_socket
+                tree.links.remove(link)
+                tree.links.new(val.outputs[0], target)
+            frozen += 1
+    return frozen
+
+
 def _preview_material(proj, mat):
     """Copie d'aperçu du matériau. Une copie retouchée n'est gardée que si le matériau du projet n'a pas changé."""
     if mat is None:
         return None
-    sig = material_signature(mat)
+    sig = f"{PREVIEW_COPY_VERSION}:{material_signature(mat)}"
     if proj.preview_keep_materials:
         for m in bpy.data.materials:
             if (m.get(TAG_PROJECT) == proj.project_id and m.get(TAG_PREVIEW) and m.get(SRC) == mat.name
@@ -504,6 +547,7 @@ def _preview_material(proj, mat):
     copy = mat.copy()
     copy.name = f"Apercu_{mat.name}"
     tag(copy, proj, role="apercu", **{TAG_PREVIEW: 1, KIND: "material", SRC: mat.name, SRC_SIG: sig})
+    freeze_python_nodes(copy)
     return copy
 
 

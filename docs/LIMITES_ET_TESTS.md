@@ -1,4 +1,4 @@
-# Vérifications, limites connues et tests restants (version 0.3.7)
+# Vérifications, limites connues et tests restants (version 0.3.8)
 
 ## Environnement des tests réellement exécutés
 
@@ -9,7 +9,7 @@
 - **Copie testée** : l'addon **installé depuis le ZIP** (`extensions.package_install_files`).
 - **Script** : `tests/run_tests.py`.
 
-**Résultat : 181/181 vérifications réussies.**
+**Résultat : 184/184 vérifications réussies.**
 
 | Point demandé | Vérification exécutée |
 |---|---|
@@ -39,6 +39,7 @@
 | Textures au rendu (0.3.6) | Copie de la chaîne : UV, images et nœuds UV Map identiques à la source ; damier rendu sur la copie (matériau d'OBJ et `ped.sps`) ; graphe Sollumz `ped` / `ped_emissive` sans couleur de sommet. Texture « paillettes » : invisible à 6 px/cm (caméra du display), visible en gros plan à 64 px/cm |
 | Gros plan et détails (0.3.6) | Rendu rapide à la résolution complète ; taille de la chaîne sur l'image estimée (px, px/cm) ; gros plan : une seule caméra dans la scène d'aperçu, même angle que celle du display, chaîne à ~75 % du cadre, caméra du display intacte ; limite de textures Simplify signalée ; deux rendus de suite sans écrasement |
 | Matériaux de l'aperçu à jour (0.3.7) | Corrigé : la copie gardait l'ancien matériau à l'actualisation. Désormais : bumpiness et texture Bump modifiées dans le projet → aperçu signalé à actualiser, puis copie refaite avec les nouvelles valeurs ; retouche de la copie gardée si le projet ne change pas ; aucune copie orpheline. Rendu Cycles éclairé : la normal map « diamants » est visible |
+| Value Parameters au rendu (0.3.8) | Constaté : Cycles ignore les nœuds Python de Sollumz. Avec une normal map en fichier, bumpiness 0, 1.3 ou 5 donnent la même image, à l'octet près ; la rugosité retombe à environ 1 (mat). Corrigé sur les copies d'aperçu seulement : chaque valeur est figée dans un nœud Valeur de Blender (aucun lien depuis un nœud Python ; bumpiness, specularFalloffMult et specularIntensityMult relus) ; matériau du projet intact. Rendu Cycles de la copie : relief des diamants visible et plus marqué |
 | Exclusion du display | Display chargé dans une scène séparée ; aucune erreur d'exclusion ; aucun objet du display dans le YDD |
 | Dépendances | Dossier Teef incomplet ou absent refusé ; Sollumz désactivé : export refusé et panneaux sans erreur |
 | Statut en erreur (0.3.3) | Si le calcul d'un statut échoue, tous les panneaux restent dessinés et l'erreur s'affiche dans le panneau concerné |
@@ -67,4 +68,5 @@
 - **Reconstruction groupée** : préparer une sélection reconstruit aussi les autres courbes déjà préparées du projet, pour garder l'empilement cohérent. Préparez un pendentif à la fois.
 - **Noms en double** : Blender ajoute `.001` quand un nom est déjà pris (par exemple drawable et fichier nommés pareil). Sollumz retire ce suffixe à l'export ; le panneau affiche le nom réellement exporté.
 - **Fichiers de stream FiveM** (manifest, métadonnées de vêtements) : hors du périmètre de l'addon.
+- **Moteur EEVEE** : non testé ici (pas de carte graphique). Les copies d'aperçu n'utilisent plus que des nœuds standard de Blender, lus de la même façon par EEVEE et Cycles.
 - **Gros plan** : la caméra est placée devant la chaîne, sous l'angle de la caméra du display. Un objet du display placé entre les deux (main, cheveux…) peut la cacher ; dans ce cas, réglez l'angle de la caméra du display.
